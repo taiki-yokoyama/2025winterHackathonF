@@ -1,0 +1,35 @@
+services:
+  # 1. Webサーバー (PHP + Apache)
+  web:
+    image: php:8.2-apache
+    ports:
+      - "8080:80"
+    volumes:
+      - ./src:/var/www/html
+    # 重要: 起動時にMySQL接続ドライバをインストールするコマンド
+    command: >
+      bash -c "docker-php-ext-install pdo_mysql && apache2-foreground"
+    depends_on:
+      - db
+
+  # 2. データベース (MySQL)
+  db:
+    image: mysql:8.0
+    platform: linux/x86_64
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: hackathon_app
+    ports:
+      - "3306:3306"
+
+  # 3. 管理画面 (phpMyAdmin)
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    environment:
+      PMA_HOST: db
+      PMA_USER: root
+      PMA_PASSWORD: root
+    ports:
+      - "8081:80"
+    depends_on:
+      - db
