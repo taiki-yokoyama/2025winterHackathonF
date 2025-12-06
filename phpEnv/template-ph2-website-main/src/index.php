@@ -4,6 +4,7 @@ session_start();
 // ==========================================
 // 1. 設定 & DB接続
 // ==========================================
+// ★TiDBを使う場合はここを書き換えてください
 $host = 'db';
 $dbname = 'hackathon_app';
 $db_user = 'root';
@@ -20,12 +21,13 @@ try {
     $pdo = new PDO($dsn, $db_user, $db_pass);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     
-    // テーブル作成 & カラム追加（マイグレーション的処理）
+    // テーブル作成（自動実行）
     $sql = "
     CREATE TABLE IF NOT EXISTS users (
         id CHAR(36) PRIMARY KEY,
         team_name VARCHAR(255) NOT NULL,
         name VARCHAR(255) NOT NULL,
+        password_hash VARCHAR(255) NOT NULL DEFAULT '', -- パスワード用
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS reflections (
@@ -36,8 +38,8 @@ try {
         next_plan TEXT,
         is_plan_done TINYINT(1) DEFAULT 0,
         progress_score INT DEFAULT 3,
-        workload_score INT DEFAULT 3,      -- 追加: 負荷
-        improvement_score INT DEFAULT 3,   -- 追加: 改善度
+        workload_score INT DEFAULT 3,
+        improvement_score INT DEFAULT 3,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS notes (
@@ -52,9 +54,11 @@ try {
     ";
     $pdo->exec($sql);
 
-    // 既存テーブルへのカラム追加（エラー無視で実行）
+    // カラム追加用（エラー無視）
     try { $pdo->exec("ALTER TABLE reflections ADD COLUMN workload_score INT DEFAULT 3"); } catch(Exception $e) {}
     try { $pdo->exec("ALTER TABLE reflections ADD COLUMN improvement_score INT DEFAULT 3"); } catch(Exception $e) {}
+    // ★念のためここでもパスワードカラム追加を試みる（SQL実行忘れ防止）
+    try { $pdo->exec("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255) NOT NULL DEFAULT ''"); } catch(Exception $e) {}
 
 } catch (PDOException $e) {
     die("<div style='text-align:center; padding:2rem;'><h3>System Initializing...</h3><p>データベース構成中です。10秒後にリロードしてください。<br>Error: " . $e->getMessage() . "</p></div>");
@@ -73,35 +77,66 @@ function h($str) { return htmlspecialchars($str, ENT_QUOTES, 'UTF-8'); }
 // 2. ロジック処理
 // ==========================================
 
-// ログイン
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'login') {
-    $team = $_POST['team_name'];
-    $name = $_POST['name'];
-    $stmt = $pdo->prepare("SELECT * FROM users WHERE team_name = ? AND name = ?");
-    $stmt->execute([$team, $name]);
-    $user = $stmt->fetch();
-
-    if (!$user) {
-        $uuid = get_uuid();
-        $stmt = $pdo->prepare("INSERT INTO users (id, team_name, name) VALUES (?, ?, ?)");
-        $stmt->execute([$uuid, $team, $name]);
-        $_SESSION['user_id'] = $uuid;
-        $_SESSION['name'] = $name;
-        $_SESSION['team_name'] = $team;
-    } else {
-        $_SESSION['user_id'] = $user['id'];
-        $_SESSION['name'] = $user['name'];
-        $_SESSION['team_name'] = $user['team_name'];
+// ▼▼▼ しっかり実装したログアウト機能 ▼▼▼
+if (isset($_GET['logout'])) {
+    $_SESSION = array(); // セッション変数を空にする
+    if (ini_get("session.use_cookies")) {
+        $params = session_get_cookie_params();
+        setcookie(session_name(), '', time() - 42000,
+            $params["path"], $params["domain"],
+            $params["secure"], $params["httponly"]
+        );
     }
+    session_destroy();
     header("Location: index.php");
     exit;
 }
 
-// ログアウト
-if (isset($_GET['logout'])) {
-    session_destroy();
-    header("Location: index.php");
-    exit;
+// ▼▼▼ しっかり実装したログイン/登録機能 ▼▼▼
+$error_message = "";
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'login') {
+    $team = trim($_POST['team_name']);
+    $name = trim($_POST['name']);
+    $pass = $_POST['password']; // パスワード
+
+    if ($team && $name && $pass) {
+        $stmt = $pdo->prepare("SELECT * FROM users WHERE team_name = ? AND name = ?");
+        $stmt->execute([$team, $name]);
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$user) {
+            // --- 新規登録 ---
+            $uuid = get_uuid();
+            $hash = password_hash($pass, PASSWORD_DEFAULT); // 暗号化
+            
+            $stmt = $pdo->prepare("INSERT INTO users (id, team_name, name, password_hash) VALUES (?, ?, ?, ?)");
+            $stmt->execute([$uuid, $team, $name, $hash]);
+            
+            session_regenerate_id(true);
+            $_SESSION['user_id'] = $uuid;
+            $_SESSION['name'] = $name;
+            $_SESSION['team_name'] = $team;
+            header("Location: index.php");
+            exit;
+        } else {
+            // --- 既存ログイン ---
+            // パスワード照合 (password_verify)
+            // ※古いユーザーなどパスワードが空の場合はそのまま通す等の調整も可能ですが、今回は厳密にチェックします
+            if (password_verify($pass, $user['password_hash'])) {
+                session_regenerate_id(true);
+                $_SESSION['user_id'] = $user['id'];
+                $_SESSION['name'] = $user['name'];
+                $_SESSION['team_name'] = $user['team_name'];
+                header("Location: index.php");
+                exit;
+            } else {
+                $error_message = "パスワードが間違っています。";
+            }
+        }
+    } else {
+        $error_message = "全ての項目を入力してください。";
+    }
 }
 
 $is_logged_in = isset($_SESSION['user_id']);
@@ -113,7 +148,6 @@ $current_team = $_SESSION['team_name'] ?? null;
 if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST') {
     // 振り返り投稿
     if (isset($_POST['action']) && $_POST['action'] === 'reflection') {
-        // 画像アップロード処理
         $image_path = '';
         if (isset($_FILES['screenshot_file']) && $_FILES['screenshot_file']['error'] === UPLOAD_ERR_OK) {
             $ext = pathinfo($_FILES['screenshot_file']['name'], PATHINFO_EXTENSION);
@@ -123,13 +157,11 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
-        // Plan達成更新
         if (isset($_POST['prev_reflection_id']) && isset($_POST['plan_done_check'])) {
             $stmt = $pdo->prepare("UPDATE reflections SET is_plan_done = 1 WHERE id = ?");
             $stmt->execute([$_POST['prev_reflection_id']]);
         }
 
-        // 新規登録
         $stmt = $pdo->prepare("INSERT INTO reflections (user_id, screenshot_url, comment, next_plan, progress_score, workload_score, improvement_score) VALUES (?, ?, ?, ?, ?, ?, ?)");
         $stmt->execute([
             $current_user_id, 
@@ -161,27 +193,23 @@ $reflections = [];
 $team_stats = ['avg_progress' => 0, 'min_progress_user' => null, 'min_score' => 5];
 
 if ($is_logged_in) {
-    // メンバー取得
     $stmt = $pdo->prepare("SELECT * FROM users WHERE team_name = ?");
     $stmt->execute([$current_team]);
     $team_members = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // 自分の前回振り返り
     $stmt = $pdo->prepare("SELECT * FROM reflections WHERE user_id = ? ORDER BY created_at DESC LIMIT 1");
     $stmt->execute([$current_user_id]);
     $latest_reflection = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    // メモ一覧
     $stmt = $pdo->prepare("SELECT * FROM notes WHERE author_id = ? ORDER BY created_at DESC");
     $stmt->execute([$current_user_id]);
     $notes = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // タイムライン
     $stmt = $pdo->prepare("SELECT r.*, u.name FROM reflections r JOIN users u ON r.user_id = u.id WHERE u.team_name = ? ORDER BY r.created_at DESC LIMIT 30");
     $stmt->execute([$current_team]);
     $reflections = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // ★チーム統計計算 (最新の投稿ベース)
+    // 集計ロジック
     $latest_scores = [];
     foreach ($team_members as $member) {
         $stmt = $pdo->prepare("SELECT progress_score FROM reflections WHERE user_id = ? ORDER BY created_at DESC LIMIT 1");
@@ -190,7 +218,6 @@ if ($is_logged_in) {
         if ($res) {
             $score = $res['progress_score'];
             $latest_scores[] = $score;
-            // 最低スコアの人を探す
             if ($score < $team_stats['min_score']) {
                 $team_stats['min_score'] = $score;
                 $team_stats['min_progress_user'] = $member['name'];
@@ -199,7 +226,7 @@ if ($is_logged_in) {
     }
     if (count($latest_scores) > 0) {
         $avg = array_sum($latest_scores) / count($latest_scores);
-        $team_stats['avg_progress'] = round(($avg / 5) * 100); // 5段階を100%換算
+        $team_stats['avg_progress'] = round(($avg / 5) * 100);
     }
 }
 ?>
@@ -221,14 +248,10 @@ if ($is_logged_in) {
         .card { border: none; border-radius: 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); overflow: hidden; }
         .btn-primary { background-color: var(--primary); border: none; border-radius: 10px; padding: 0.6rem 1.2rem; }
         .form-control, .form-select { border-radius: 10px; padding: 0.7rem; }
-        
-        /* 3色メモ */
         .note-card { border-left: 5px solid #ddd; }
         .my-good { background: #eff6ff; border-left-color: #3b82f6; }
         .my-more { background: #fefce8; border-left-color: #eab308; }
         .member-msg { background: #f0fdf4; border-left-color: #22c55e; }
-
-        /* スライダー装飾 */
         .range-label { font-size: 0.8rem; font-weight: bold; color: #6b7280; display: flex; justify-content: space-between; margin-bottom: 5px; }
         .range-value { font-size: 1.2rem; font-weight: bold; color: var(--primary); }
     </style>
@@ -237,9 +260,15 @@ if ($is_logged_in) {
 
 <nav class="navbar sticky-top mb-4">
     <div class="container">
-        <a class="navbar-brand fw-bold text-primary" href="#"><i class="bi bi-diagram-3-fill me-2"></i>Sync</a>
+        <a class="navbar-brand fw-bold text-primary" href="index.php"><i class="bi bi-diagram-3-fill me-2"></i>Sync</a>
+        
         <?php if ($is_logged_in): ?>
-            <span class="small fw-bold">Team: <?= h($current_team) ?> / <?= h($current_user_name) ?></span>
+            <div class="d-flex align-items-center gap-3">
+                <span class="small fw-bold">Team: <?= h($current_team) ?> / <?= h($current_user_name) ?></span>
+                <a href="?logout=true" class="btn btn-sm btn-outline-danger" onclick="return confirm('ログアウトしますか？');">
+                    <i class="bi bi-box-arrow-right"></i> ログアウト
+                </a>
+            </div>
         <?php endif; ?>
     </div>
 </nav>
@@ -250,11 +279,31 @@ if ($is_logged_in) {
             <div class="col-md-4">
                 <div class="card p-4">
                     <h4 class="text-center fw-bold mb-4">Login</h4>
+                    
+                    <?php if (!empty($error_message)): ?>
+                        <div class="alert alert-danger p-2 small"><?= h($error_message) ?></div>
+                    <?php endif; ?>
+
                     <form method="post">
                         <input type="hidden" name="action" value="login">
-                        <div class="mb-3"><label>チーム名</label><input type="text" name="team_name" class="form-control" required placeholder="posse_team1"></div>
-                        <div class="mb-4"><label>名前</label><input type="text" name="name" class="form-control" required placeholder="Taro"></div>
-                        <button type="submit" class="btn btn-primary w-100">Start</button>
+                        
+                        <div class="mb-3">
+                            <label class="form-label small fw-bold">チーム名</label>
+                            <input type="text" name="team_name" class="form-control" required placeholder="posse_team1">
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label small fw-bold">名前</label>
+                            <input type="text" name="name" class="form-control" required placeholder="Taro">
+                        </div>
+
+                        <div class="mb-4">
+                            <label class="form-label small fw-bold">パスワード</label>
+                            <input type="password" name="password" class="form-control" required placeholder="半角英数字">
+                            <div class="form-text text-xs">初回は入力したパスワードで新規登録されます</div>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary w-100">Login / Register</button>
                     </form>
                 </div>
             </div>
@@ -278,7 +327,6 @@ if ($is_logged_in) {
                             <div class="alert alert-danger mb-0 py-2 border-0 rounded-3 shadow-sm">
                                 <i class="bi bi-exclamation-circle-fill me-1"></i>
                                 <strong>SOS!</strong> <?= h($team_stats['min_progress_user']) ?>さんが遅れています(Lv.<?= $team_stats['min_score'] ?>)
-                                <div class="small mt-1">声をかけてボトルネックを解消しよう！</div>
                             </div>
                         <?php else: ?>
                             <div class="alert alert-success mb-0 py-2 border-0 rounded-3">
@@ -302,7 +350,8 @@ if ($is_logged_in) {
                         <div class="card h-100">
                             <div class="card-header bg-white fw-bold"><i class="bi bi-pencil-square text-primary me-2"></i>今日の振り返り</div>
                             <div class="card-body">
-                                <form method="post" enctype="multipart/form-data"> <input type="hidden" name="action" value="reflection">
+                                <form method="post" enctype="multipart/form-data"> 
+                                    <input type="hidden" name="action" value="reflection">
                                     
                                     <?php if ($latest_reflection): ?>
                                         <div class="p-3 mb-4 rounded-3 bg-light border border-warning">
