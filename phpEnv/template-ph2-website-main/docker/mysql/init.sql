@@ -1,48 +1,81 @@
-DROP DATABASE IF EXISTS posse;
-CREATE DATABASE posse;
+-- 1. データベースの作成（存在しない場合のみ）
+CREATE DATABASE IF NOT EXISTS hackathon_app CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
-USE posse;
+-- 2. データベースを選択
+USE hackathon_app;
 
-CREATE TABLE questions(
-    id INT PRIMARY KEY AUTO_INCREMENT,
+-- 3. ユーザーテーブル
+CREATE TABLE IF NOT EXISTS users (
+    id CHAR(36) PRIMARY KEY,
+    team_name VARCHAR(255) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    password_hash VARCHAR(255) NOT NULL DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 4. チーム目標テーブル（期間：開始日・終了日付き）
+CREATE TABLE IF NOT EXISTS team_goals (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    team_name VARCHAR(255) NOT NULL,
+    start_date DATE,
+    end_date DATE,
+    goal_text TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+-- 5. 個人タスクテーブル
+CREATE TABLE IF NOT EXISTS tasks (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id CHAR(36) NOT NULL,
     content VARCHAR(255) NOT NULL,
-    image VARCHAR(255),
-    supplement VARCHAR(255)
+    is_done TINYINT(1) DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO questions(content,image,supplement) VALUES 
-('日本のIT人材が2030年には最大どれくらい不足すると言われているでしょうか？', 'img-quiz01.png', '経済産業省 2019年3月 － IT 人材需給に関する調査'),
-('既存業界のビジネスと、先進的なテクノロジーを結びつけて生まれた、新しいビジネスのことをなんと言うでしょう？', 'img-quiz02.png', 'なし'),
-('IoTとは何の略でしょう？', 'img-quiz03.png', 'なし'),
-('サイバー空間とフィジカル空間を高度に融合させたシステムにより、経済発展と社会的課題の解決を両立する、人間中心の社会のことをなんと言うでしょう？', 'img-quiz04.png', 'Society5.0 - 科学技術政策 - 内閣府'),
-('イギリスのコンピューター科学者であるギャビン・ウッド氏が提唱した、ブロックチェーン技術を活用した「次世代分散型インターネット」のことをなんと言うでしょう？', 'img-quiz05.png', 'なし'),
-('先進テクノロジー活用企業と出遅れた企業の収益性の差はどれくらいあると言われているでしょうか？', 'img-quiz06.png', 'Accenture Technology Vision 2021')
-;
-
-CREATE TABLE choice(
-    id INT PRIMARY KEY AUTO_INCREMENT,
-    question_id INT NOT NULL,
-    name VARCHAR(255),
-    valid INT NOT NULL
+-- 6. 毎回の振り返りテーブル（画像2枚：画面・コード）
+CREATE TABLE IF NOT EXISTS reflections (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id CHAR(36) NOT NULL,
+    screenshot_url TEXT,
+    code_url TEXT,           -- コード画像のパス
+    comment TEXT,
+    next_plan TEXT,          -- 画面上は削除しましたがDBには残しておきます（エラー防止）
+    is_plan_done TINYINT(1) DEFAULT 0,
+    progress_score INT DEFAULT 3, -- 画面上は削除しましたがDBには残しておきます
+    workload_score INT DEFAULT 3, -- 画面上は削除しましたがDBには残しておきます
+    improvement_score INT DEFAULT 3, -- 画面上は削除しましたがDBには残しておきます
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO choice(id,question_id,name,valid) VALUES
-(1, 1, '約28万人', 0),
-(2, 1, '約79万人', 1),
-(3, 1, '約183万人', 0),
-(4, 2, 'INTECH', 0),
-(5, 2, 'BIZZTECH', 0),
-(6, 2, 'X-TECH', 1),
-(7, 3, 'Internet of Things', 1),
-(8, 3, 'Integrate into Technology', 0),
-(9, 3, 'Information on Tool', 0),
-(10, 4, 'Society 5.0', 1),
-(11, 4, 'CyPhy', 0),
-(12, 4, 'SDGs', 0),
-(13, 5, 'Web3.0', 1),
-(14, 5, 'NFT', 0),
-(15, 5, 'メタバース', 0),
-(16, 6, '約2倍', 0),
-(17, 6, '約5倍', 1),
-(18, 6, '約11倍', 0)
-;
+-- 7. 週次振り返りテーブル（チーム目標IDと紐づけ）
+CREATE TABLE IF NOT EXISTS weekly_reflections (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id CHAR(36) NOT NULL,
+    goal_id INT,             -- team_goalsのidと紐づく
+    progress_score INT DEFAULT 3,
+    workload_score INT DEFAULT 3,
+    improvement_score INT DEFAULT 3,
+    team_good TEXT,
+    team_more TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 8. 人格メモ（Good & More）テーブル
+CREATE TABLE IF NOT EXISTS notes (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    author_id CHAR(36) NOT NULL,
+    author_name VARCHAR(255) NOT NULL,
+    target_user_name VARCHAR(255) NOT NULL,
+    type ENUM('GOOD', 'MORE') NOT NULL,
+    content TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 9. 中間振り返りリンクテーブル
+CREATE TABLE IF NOT EXISTS intermediate_reviews (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id CHAR(36) NOT NULL,
+    review_date DATE NOT NULL,
+    sheet_url TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
