@@ -1,10 +1,8 @@
--- 1. データベースの作成（存在しない場合のみ）
+-- 1. データベースの選択/作成
 CREATE DATABASE IF NOT EXISTS hackathon_app CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- 2. データベースを選択
 USE hackathon_app;
 
--- 3. ユーザーテーブル
+-- 2. ユーザーテーブル (ログイン/パスワードハッシュ対応)
 CREATE TABLE IF NOT EXISTS users (
     id CHAR(36) PRIMARY KEY,
     team_name VARCHAR(255) NOT NULL,
@@ -13,7 +11,7 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 4. チーム目標テーブル（期間：開始日・終了日付き）
+-- 3. チーム目標テーブル (期間付き)
 CREATE TABLE IF NOT EXISTS team_goals (
     id INT AUTO_INCREMENT PRIMARY KEY,
     team_name VARCHAR(255) NOT NULL,
@@ -23,7 +21,7 @@ CREATE TABLE IF NOT EXISTS team_goals (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
--- 5. 個人タスクテーブル
+-- 4. 個人タスクテーブル
 CREATE TABLE IF NOT EXISTS tasks (
     id INT AUTO_INCREMENT PRIMARY KEY,
     user_id CHAR(36) NOT NULL,
@@ -32,26 +30,26 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 6. 毎回の振り返りテーブル（画像2枚：画面・コード）
+-- 5. 毎回の振り返りテーブル (画像2枚対応)
 CREATE TABLE IF NOT EXISTS reflections (
     id INT AUTO_INCREMENT PRIMARY KEY,
     user_id CHAR(36) NOT NULL,
     screenshot_url TEXT,
-    code_url TEXT,           -- コード画像のパス
+    code_url TEXT,
     comment TEXT,
-    next_plan TEXT,          -- 画面上は削除しましたがDBには残しておきます（エラー防止）
+    next_plan TEXT,
     is_plan_done TINYINT(1) DEFAULT 0,
-    progress_score INT DEFAULT 3, -- 画面上は削除しましたがDBには残しておきます
-    workload_score INT DEFAULT 3, -- 画面上は削除しましたがDBには残しておきます
-    improvement_score INT DEFAULT 3, -- 画面上は削除しましたがDBには残しておきます
+    progress_score INT DEFAULT 3,
+    workload_score INT DEFAULT 3,
+    improvement_score INT DEFAULT 3,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 7. 週次振り返りテーブル（チーム目標IDと紐づけ）
+-- 6. 週次振り返りテーブル (goal_id連携)
 CREATE TABLE IF NOT EXISTS weekly_reflections (
     id INT AUTO_INCREMENT PRIMARY KEY,
     user_id CHAR(36) NOT NULL,
-    goal_id INT,             -- team_goalsのidと紐づく
+    goal_id INT,
     progress_score INT DEFAULT 3,
     workload_score INT DEFAULT 3,
     improvement_score INT DEFAULT 3,
@@ -60,7 +58,7 @@ CREATE TABLE IF NOT EXISTS weekly_reflections (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 8. 人格メモ（Good & More）テーブル
+-- 7. 人格メモテーブル (非公開メモ)
 CREATE TABLE IF NOT EXISTS notes (
     id INT AUTO_INCREMENT PRIMARY KEY,
     author_id CHAR(36) NOT NULL,
@@ -71,7 +69,7 @@ CREATE TABLE IF NOT EXISTS notes (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 9. 中間振り返りリンクテーブル
+-- 8. 中間振り返りリンクテーブル
 CREATE TABLE IF NOT EXISTS intermediate_reviews (
     id INT AUTO_INCREMENT PRIMARY KEY,
     user_id CHAR(36) NOT NULL,

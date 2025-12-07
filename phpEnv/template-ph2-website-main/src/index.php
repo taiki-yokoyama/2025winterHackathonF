@@ -17,7 +17,7 @@ try {
     $pdo = new PDO($dsn, $db_user, $db_pass);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 } catch (PDOException $e) {
-    die("DB Error: " . $e->getMessage());
+    die("DB接続エラー: " . $e->getMessage());
 }
 
 function get_uuid() {
@@ -281,26 +281,78 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;500;700&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Noto Sans JP', sans-serif; background-color: #f4f4f4; overflow-x: hidden; }
+        /* =========================================================
+           カラーパレット定義
+           薄い茶色：#E3D3BF
+           枠の中間茶色：#D1C1AC
+           一番濃い茶色：#9B7B5B
+           ミントグリーン：#AFEEEE
+        ========================================================= */
+        :root {
+            --color-bg-light: #E3D3BF;
+            --color-bg-medium: #D1C1AC;
+            --color-bg-dark: #9B7B5B;
+            --color-accent: #AFEEEE;
+            --color-text-main: #5a4a42; /* 濃い茶色ベースの文字色 */
+        }
+
+        body { 
+            font-family: 'Noto Sans JP', sans-serif; 
+            background-color: #ffffff; /* ベースは白 */
+            color: #333;
+            overflow-x: hidden; 
+            padding-top: 60px; 
+        }
         
+        /* 固定ヘッダー */
+        .top-header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 60px;
+            background-color: #ffffff;
+            border-bottom: 2px solid var(--color-bg-medium); /* 枠の中間茶色 */
+            z-index: 2000;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 2rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .brand-logo {
+            /* font-weight: 700;
+            font-size: 1.5rem;
+            color: var(--color-bg-dark); 
+            text-decoration: none; */
+            display: flex;
+            align-items: center;
+            /* gap: 0.5rem; */
+        }
+
         /* サイドバー */
         .sidebar {
             width: 120px;
-            height: 100vh;
-            background-color: #d9d9d9;
+            height: calc(100vh - 60px);
+            background-color: var(--color-bg-dark); /* 一番濃い茶色 */
             position: fixed;
             left: 0;
-            top: 0;
+            top: 60px;
             display: flex;
             flex-direction: column;
             align-items: center;
             padding-top: 2rem;
+            padding-bottom: 2rem;
             z-index: 1000;
+            overflow-y: auto;
         }
+        .sidebar::-webkit-scrollbar { width: 6px; }
+        .sidebar::-webkit-scrollbar-thumb { background-color: rgba(255,255,255,0.2); border-radius: 3px; }
+
         .nav-btn {
             width: 70px;
             height: 70px;
-            background-color: white;
+            background-color: var(--color-accent); /* ミントグリーン */
             border-radius: 50%;
             margin-bottom: 0.5rem;
             border: none;
@@ -308,26 +360,63 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
             align-items: center;
             justify-content: center;
             cursor: pointer;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
             transition: all 0.2s;
+            flex-shrink: 0;
+            color: var(--color-bg-dark); /* アイコン色は濃い茶色 */
         }
-        .nav-btn:hover, .nav-btn.active { background-color: #4F46E5; color: white; transform: scale(1.05); }
-        .nav-btn i { font-size: 1.5rem; }
-        .nav-label { font-size: 0.6rem; text-align: center; margin-bottom: 2rem; font-weight: bold; color: #555; }
-        .nav-arrow { font-size: 1.5rem; color: #333; margin-bottom: 1rem; }
+        
+        /* ★修正: アクティブ・ホバー時に色を反転 */
+        .nav-btn:hover, .nav-btn.active, .nav-btn:active { 
+            transform: scale(1.05); 
+            box-shadow: 0 0 10px rgba(175, 238, 238, 0.6); 
+            background-color: var(--color-bg-dark); /* 背景を濃い茶色に */
+            color: var(--color-accent); /* アイコンをミントに */
+            border: 2px solid var(--color-accent); /* 視認性向上のため枠線追加 */
+        }
+        .nav-btn i { font-size: 1.8rem; }
+        
+        /* サイドバーの文字色を白に変更 */
+        .nav-label { 
+            font-size: 0.7rem; 
+            text-align: center; 
+            margin-bottom: 2rem; 
+            font-weight: bold; 
+            color: #ffffff; 
+        }
+        .nav-arrow { 
+            font-size: 1.5rem; 
+            color: #ffffff; 
+            margin-bottom: 1rem; 
+        }
 
         /* メインコンテンツ */
-        .main-content { margin-left: 120px; padding: 2rem 4rem; min-height: 100vh; background-color: white; }
+        .main-content { margin-left: 120px; padding: 2rem 4rem; min-height: calc(100vh - 60px); background-color: #ffffff; }
         
         /* デザイン要素 */
         .section-header { text-align: center; margin-bottom: 2rem; }
-        .section-header h2 { font-size: 1.5rem; font-weight: bold; }
-        .gray-box { background-color: #d9d9d9; padding: 1.5rem; text-align: center; margin-bottom: 3rem; border-radius: 4px; }
+        .section-header h2 { 
+            font-size: 1.5rem; 
+            font-weight: bold; 
+            color: var(--color-bg-dark); /* 濃い茶色 */
+        }
         
+        /* 背景ボックス (gray-box, form-area, timeline-area) */
+        .gray-box, .form-area, .timeline-area { 
+            background-color: var(--color-bg-light); /* 薄い茶色 */
+            padding: 2rem; 
+            border-radius: 4px; 
+            margin-bottom: 2rem;
+        }
+        .gray-box { text-align: center; margin-bottom: 3rem; }
+        .form-area { height: 100%; }
+        .timeline-area { height: 700px; overflow-y: auto; }
+        
+        /* タブボタン */
         .sub-tab-container { display: flex; gap: 20px; margin-bottom: 2rem; align-items: center; }
         .sub-tab-btn {
-            background-color: #d9d9d9;
-            color: #333;
+            background-color: var(--color-bg-light); /* 薄い茶色 */
+            color: var(--color-text-main);
             padding: 15px 20px;
             font-size: 1.2rem;
             border: none;
@@ -337,10 +426,16 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
             font-weight: 700;
             transition: 0.3s;
         }
-        .sub-tab-btn.active { background-color: #d9d9d9; color: #333; border: 2px solid #333; }
+        
+        /* ★修正: タブアクティブ時に色を反転 (濃い茶色背景 + ミント文字) */
+        .sub-tab-btn.active, .sub-tab-btn:hover { 
+            background-color: var(--color-bg-dark); 
+            color: var(--color-accent); 
+        }
+        
         .next-plan-btn {
-            background-color: #d9d9d9;
-            color: #333;
+            background-color: var(--color-bg-medium);
+            color: #fff;
             padding: 15px 20px;
             font-size: 1rem;
             border: none;
@@ -349,39 +444,98 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
             font-weight: 500;
             display: block;
             width: 200px;
+            transition: 0.3s;
         }
-        
-        .form-area { background-color: #d9d9d9; padding: 2rem; border-radius: 4px; height: 100%; }
-        .timeline-area { background-color: #d9d9d9; padding: 2rem; border-radius: 4px; height: 700px; overflow-y: auto; }
-        .timeline-card { background: white; padding: 1.5rem; margin-bottom: 1rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        /* ★修正: ホバー時に色を反転 */
+        .next-plan-btn:hover, .next-plan-btn:active { 
+            background-color: var(--color-bg-dark); 
+            color: var(--color-accent); 
+        }
+
+        .timeline-card { 
+            background: white; 
+            padding: 1.5rem; 
+            margin-bottom: 1rem; 
+            border-radius: 8px; 
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05); 
+            border-left: 4px solid var(--color-bg-medium); /* 左端にアクセント */
+        }
 
         .note-card-good { background-color: #fff9e6; border-left: 6px solid #ffc107; color: #856404; }
         .note-card-more { background-color: #e6f2ff; border-left: 6px solid #17a2b8; color: #0c5460; }
         .note-emoji { font-size: 1.5rem; margin-right: 0.5rem; }
         .table-warning-row { background-color: #ffe6e6 !important; color: #dc3545; font-weight: bold; }
 
-        .login-wrapper { display: flex; justify-content: center; align-items: center; height: 100vh; margin-left: 0; background-color: #f4f4f4; }
-        .arrow-icon { font-size: 2rem; color: #333; font-weight: bold; }
+        .login-wrapper { display: flex; justify-content: center; align-items: center; height: 100vh; margin-left: 0; background-color: #fcfcfc; padding-top: 0; }
+        .arrow-icon { font-size: 2rem; color: var(--color-bg-dark); font-weight: bold; }
+
+        /* Bootstrap上書き (ボタン類を茶色ベースに) */
+        .btn-dark {
+            background-color: var(--color-bg-dark) !important;
+            border-color: var(--color-bg-dark) !important;
+            color: #fff !important;
+        }
+        /* ★修正: アクティブ・ホバー時に色を反転 (ミント背景 + 濃い茶色文字) */
+        .btn-dark:hover, .btn-dark:active, .btn-dark:focus {
+            background-color: var(--color-accent) !important; /* ミント */
+            border-color: var(--color-bg-dark) !important;
+            color: var(--color-bg-dark) !important; /* 濃い茶色 */
+        }
+
+        .btn-outline-secondary {
+            color: var(--color-bg-dark) !important;
+            border-color: var(--color-bg-dark) !important;
+        }
+        .btn-outline-secondary:hover, .btn-outline-secondary:active {
+            background-color: var(--color-bg-dark) !important;
+            color: var(--color-accent) !important; /* ミント */
+        }
+        
+        /* フォームのラベル等を茶色系に */
+        .form-label, .fw-bold { color: var(--color-bg-dark); }
+        .text-secondary { color: #887060 !important; }
+
+        /* 入力フォームの微調整 */
+        .form-control, .form-select {
+            border: 1px solid var(--color-bg-medium);
+        }
+        .form-control:focus, .form-select:focus {
+            border-color: var(--color-bg-dark);
+            box-shadow: 0 0 0 0.25rem rgba(155, 123, 91, 0.25);
+        }
+
     </style>
 </head>
 <body>
 
 <?php if (!$is_logged_in): ?>
     <div class="container login-wrapper">
-        <div class="card p-5 shadow-lg" style="width: 400px; border-radius: 20px;">
-            <h3 class="text-center fw-bold mb-4">Sync Login</h3>
+        <div class="card p-5 shadow-lg" style="width: 400px; border-radius: 20px; background-color: #fff; border-top: 10px solid var(--color-bg-dark);">
+            <h3 class="text-center fw-bold mb-4" style="color:var(--color-bg-dark)">Sync ログイン</h3>
             <?php if ($error_message): ?><div class="alert alert-danger py-2"><?= h($error_message) ?></div><?php endif; ?>
             <form method="post">
                 <input type="hidden" name="action" value="login">
-                <div class="mb-3"><label class="form-label small fw-bold">チーム名</label><input type="text" name="team_name" class="form-control" required></div>
-                <div class="mb-3"><label class="form-label small fw-bold">名前</label><input type="text" name="name" class="form-control" required></div>
-                <div class="mb-4"><label class="form-label small fw-bold">パスワード</label><input type="password" name="password" class="form-control" required></div>
-                <button type="submit" class="btn btn-dark w-100 py-2">Start</button>
+                <div class="mb-3"><label class="form-label small fw-bold">チーム名</label><input type="text" name="team_name" class="form-control" required placeholder="posse_team1"></div>
+                <div class="mb-3"><label class="form-label small fw-bold">名前</label><input type="text" name="name" class="form-control" required placeholder="Taro"></div>
+                <div class="mb-4"><label class="form-label small fw-bold">パスワード</label><input type="password" name="password" class="form-control" required placeholder="半角英数字"></div>
+                <button type="submit" class="btn btn-dark w-100 py-2">はじめる</button>
             </form>
         </div>
     </div>
 
 <?php else: ?>
+    <header class="top-header">
+        <a href="index.php" class="brand-logo">
+            <img src="./img/logo-winter.png" alt="Sync ロゴ" class="img-fluid" style="max-height: 80px;">
+        </a>
+        <div class="d-flex align-items-center gap-3">
+            <span class="small fw-bold" style="color: #666;">チーム: <?= h($current_team) ?> / <?= h($current_user_name) ?></span>
+            <a href="?logout=true" class="btn btn-sm btn-outline-danger" onclick="return confirm('ログアウトしますか？')">
+                <i class="bi bi-box-arrow-right"></i> ログアウト
+            </a>
+        </div>
+    </header>
+
     <div class="sidebar">
         <button class="nav-btn <?= $initial_tab === 'dashboard' ? 'active' : '' ?>" onclick="switchTab('dashboard')"><i class="bi bi-house-door-fill"></i></button>
         <div class="nav-label">今週のPLAN</div>
@@ -397,10 +551,6 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
 
         <button class="nav-btn <?= $initial_tab === 'notes' ? 'active' : '' ?>" onclick="switchTab('notes')"><i class="bi bi-chat-heart-fill"></i></button>
         <div class="nav-label">中間<br>Good&More</div>
-
-        <div class="mt-auto mb-4">
-            <a href="?logout=true" class="text-secondary" onclick="return confirm('ログアウトしますか？')"><i class="bi bi-box-arrow-left fs-3"></i></a>
-        </div>
     </div>
 
     <div class="main-content">
@@ -408,7 +558,7 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
         <div id="tab-dashboard" class="content-section <?= $initial_tab !== 'dashboard' ? 'd-none' : '' ?>">
             <div class="section-header"><h2>今週1週間のPLANはこちら</h2></div>
             <div class="gray-box position-relative group">
-                <div class="badge bg-secondary mb-2" style="font-size: 0.9rem;"><?= h($current_period) ?></div>
+                <div class="badge bg-secondary mb-2" style="font-size: 0.9rem; background-color: var(--color-bg-dark) !important;">現在の期間: <?= h($current_period) ?></div>
                 <h5>チームとしての1週間の目標</h5>
                 <h3 class="fw-bold mt-2"><?= nl2br(h($team_goal_text)) ?></h3>
                 <button class="btn btn-sm btn-outline-secondary position-absolute top-0 end-0 m-2" onclick="document.getElementById('edit-goal-form').classList.toggle('d-none')">編集/次週設定</button>
@@ -430,7 +580,7 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
                     <?php foreach ($team_members as $member): ?>
                         <div class="col-md-6 mb-3">
                             <div class="bg-white p-3 rounded">
-                                <h6 class="fw-bold border-bottom pb-2 mb-2"><i class="bi bi-person-circle"></i> <?= h($member['name']) ?></h6>
+                                <h6 class="fw-bold border-bottom pb-2 mb-2" style="border-color:var(--color-bg-medium)!important"><i class="bi bi-person-circle"></i> <?= h($member['name']) ?></h6>
                                 <ul class="list-unstyled mb-2">
                                     <?php if(isset($tasks_by_user[$member['name']])): foreach($tasks_by_user[$member['name']] as $task): ?>
                                         <li class="d-flex align-items-center mb-1">
@@ -442,7 +592,7 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
                                     <?php endforeach; endif; ?>
                                 </ul>
                                 <?php if($member['name'] === $current_user_name): ?>
-                                    <form method="post" class="d-flex gap-2"><input type="hidden" name="action" value="add_task"><input type="text" name="content" class="form-control form-control-sm" required><button type="submit" class="btn btn-sm btn-dark">+</button></form>
+                                    <form method="post" class="d-flex gap-2"><input type="hidden" name="action" value="add_task"><input type="text" name="content" class="form-control form-control-sm" required placeholder="タスク追加"><button type="submit" class="btn btn-sm btn-dark">+</button></form>
                                 <?php endif; ?>
                             </div>
                         </div>
@@ -479,7 +629,7 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
                             <h5 class="fw-bold mb-3">進捗共有スレッド一覧</h5>
                             <?php if (empty($reflections)): ?><p class="text-muted text-center mt-5">まだ投稿がありません。</p><?php else: foreach ($reflections as $ref): ?>
                                 <div class="timeline-card">
-                                    <div class="d-flex justify-content-between align-items-center mb-2"><div class="d-flex align-items-center gap-2"><div class="bg-primary text-white rounded-circle d-flex align-items-center justify-content-center" style="width:32px;height:32px;font-weight:bold;"><?= substr(h($ref['name']), 0, 1) ?></div><span class="fw-bold"><?= h($ref['name']) ?></span></div><small class="text-muted"><?= date('m/d H:i', strtotime($ref['created_at'])) ?></small></div>
+                                    <div class="d-flex justify-content-between align-items-center mb-2"><div class="d-flex align-items-center gap-2"><div class="text-white rounded-circle d-flex align-items-center justify-content-center" style="width:32px;height:32px;font-weight:bold; background-color:var(--color-bg-dark);"><?= substr(h($ref['name']), 0, 1) ?></div><span class="fw-bold"><?= h($ref['name']) ?></span></div><small class="text-muted"><?= date('m/d H:i', strtotime($ref['created_at'])) ?></small></div>
                                     <p class="mb-3" style="font-size: 0.95rem; white-space: pre-wrap;"><?= h($ref['comment']) ?></p>
                                     <div class="row g-2">
                                         <?php if(!empty($ref['code_url'])): ?><div class="col-6"><div class="small fw-bold text-muted mb-1">Code</div><img src="<?= h($ref['code_url']) ?>" class="img-fluid rounded border w-100" style="height: 150px; object-fit: cover; cursor: pointer;" onclick="window.open(this.src)"></div><?php endif; ?>
@@ -501,7 +651,7 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
                                 <div class="mb-3"><label class="small fw-bold d-block mb-1">対象者</label><select name="target_user_name" class="form-select bg-white"><option value="">プルダウン選択</option><option value="<?= h($current_user_name) ?>">自分 (Myself)</option><?php foreach ($team_members as $m): if($m['name'] !== $current_user_name): ?><option value="<?= h($m['name']) ?>"><?= h($m['name']) ?>さん</option><?php endif; endforeach; ?></select></div>
                                 <div class="mb-3"><label class="small fw-bold d-block mb-1">Good / More</label><select name="type" class="form-select bg-white"><option value="">プルダウン選択</option><option value="GOOD">Good (良い点)</option><option value="MORE">More (改善点)</option></select></div>
                                 <div class="mb-4"><label class="small fw-bold d-block mb-1">コメント</label><textarea name="content" class="form-control" rows="8" placeholder="具体的な行動や発言についてメモしておこう" required></textarea></div>
-                                <button type="submit" class="btn btn-light w-100 fw-bold py-2 border shadow-sm">保存する</button>
+                                <button type="submit" class="btn btn-dark w-100 fw-bold py-2 border shadow-sm">保存する</button>
                             </form>
                         </div>
                     </div>
@@ -553,7 +703,7 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
                                     <h5 class="fw-bold mb-4">チームへの Good & More</h5>
                                     <div class="mb-3"><label class="fw-bold small mb-1">Good</label><textarea name="team_good" class="form-control" rows="4" required></textarea></div>
                                     <div class="mb-3"><label class="fw-bold small mb-1">More</label><textarea name="team_more" class="form-control" rows="4" required></textarea></div>
-                                    <div class="mt-auto text-end"><button type="submit" class="btn btn-secondary px-5 py-2">共有する</button></div>
+                                    <div class="mt-auto text-end"><button type="submit" class="btn btn-dark px-5 py-2">共有する</button></div>
                                 </div>
                             </div>
                         </div>
@@ -566,9 +716,9 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
                     <div class="col-md-7">
                         <div class="form-area">
                             <h5 class="fw-bold mb-3">チーム全体の進捗 (平均: <?= h($current_period) ?>)</h5>
-                            <div class="progress mb-5" style="height: 30px;"><div class="progress-bar bg-success" role="progressbar" style="width: <?= $team_avg_percent ?>%; font-weight:bold; font-size:1.1rem;"><?= $team_avg_percent ?>%</div></div>
+                            <div class="progress mb-5" style="height: 30px; background-color: #fff;"><div class="progress-bar bg-success" role="progressbar" style="width: <?= $team_avg_percent ?>%; font-weight:bold; font-size:1.1rem; background-color: var(--color-bg-dark) !important;"><?= $team_avg_percent ?>%</div></div>
                             <table class="table table-bordered bg-white text-center align-middle">
-                                <thead class="table-light"><tr><th>Name</th><th>進捗</th><th>負荷</th><th>改善度</th></tr></thead>
+                                <thead class="table-light"><tr><th>名前</th><th>進捗</th><th>負荷</th><th>改善度</th></tr></thead>
                                 <tbody>
                                     <?php foreach ($weekly_data_list as $wd): $is_warning = ($wd['progress'] !== '-' && $wd['progress'] == $min_progress); ?>
                                         <tr class="<?= $is_warning ? 'table-warning-row' : '' ?>"><td class="fw-bold"><?= h($wd['name']) ?></td><td><?= h($wd['progress']) ?></td><td><?= h($wd['workload']) ?></td><td><?= h($wd['improvement']) ?></td></tr>
@@ -601,7 +751,7 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
                     </div>
                     <div class="timeline-area bg-white border" style="height: auto; min-height: 300px;">
                         <h5 class="fw-bold mb-3 text-secondary">過去の実施ログ</h5>
-                        <?php if(empty($intermediate_links)): ?><p class="text-center text-muted py-5">まだ記録がありません。</p><?php else: ?><div class="list-group"><?php foreach($intermediate_links as $link): ?><a href="<?= h($link['sheet_url']) ?>" target="_blank" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center p-3"><div><h5 class="mb-1 fw-bold"><i class="bi bi-file-earmark-spreadsheet text-success me-2"></i><?= date('Y年n月j日', strtotime($link['review_date'])) ?> 実施分</h5><small class="text-muted"><?= h($link['sheet_url']) ?></small></div><span class="badge bg-primary rounded-pill">Open <i class="bi bi-box-arrow-up-right ms-1"></i></span></a><?php endforeach; ?></div><?php endif; ?>
+                        <?php if(empty($intermediate_links)): ?><p class="text-center text-muted py-5">まだ記録がありません。</p><?php else: ?><div class="list-group"><?php foreach($intermediate_links as $link): ?><a href="<?= h($link['sheet_url']) ?>" target="_blank" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center p-3"><div><h5 class="mb-1 fw-bold"><i class="bi bi-file-earmark-spreadsheet text-success me-2"></i><?= date('Y年n月j日', strtotime($link['review_date'])) ?> 実施分</h5><small class="text-muted"><?= h($link['sheet_url']) ?></small></div><span class="badge bg-primary rounded-pill" style="background-color: var(--color-bg-dark) !important;">開く <i class="bi bi-box-arrow-up-right ms-1"></i></span></a><?php endforeach; ?></div><?php endif; ?>
                     </div>
                 </div>
             </div>
@@ -614,7 +764,7 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title fw-bold">過去の記録 (アーカイブ)</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="閉じる"></button>
                 </div>
                 <div class="modal-body bg-light">
                     <?php if(empty($archive_data)): ?>
@@ -685,3 +835,4 @@ function switchWeeklySubTab(subName) {
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
+
