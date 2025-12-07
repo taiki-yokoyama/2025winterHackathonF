@@ -4,72 +4,24 @@ session_start();
 // ==========================================
 // 1. 設定 & DB接続
 // ==========================================
-// ★TiDBを使う場合はここを書き換えてください
-$host = 'db';
+$host = 'db'; 
 $dbname = 'hackathon_app';
 $db_user = 'root';
 $db_pass = 'root';
 $upload_dir = __DIR__ . '/uploads/';
 
-// アップロード用ディレクトリの自動作成
-if (!file_exists($upload_dir)) {
-    mkdir($upload_dir, 0777, true);
-}
+if (!file_exists($upload_dir)) { mkdir($upload_dir, 0777, true); }
 
 try {
     $dsn = "mysql:host=$host;dbname=$dbname;charset=utf8mb4";
     $pdo = new PDO($dsn, $db_user, $db_pass);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-    
-    // テーブル作成（自動実行）
-    $sql = "
-    CREATE TABLE IF NOT EXISTS users (
-        id CHAR(36) PRIMARY KEY,
-        team_name VARCHAR(255) NOT NULL,
-        name VARCHAR(255) NOT NULL,
-        password_hash VARCHAR(255) NOT NULL DEFAULT '', -- パスワード用
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS reflections (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        user_id CHAR(36) NOT NULL,
-        screenshot_url TEXT,
-        comment TEXT,
-        next_plan TEXT,
-        is_plan_done TINYINT(1) DEFAULT 0,
-        progress_score INT DEFAULT 3,
-        workload_score INT DEFAULT 3,
-        improvement_score INT DEFAULT 3,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS notes (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        author_id CHAR(36) NOT NULL,
-        author_name VARCHAR(255) NOT NULL,
-        target_user_name VARCHAR(255) NOT NULL,
-        type ENUM('GOOD', 'MORE') NOT NULL,
-        content TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    ";
-    $pdo->exec($sql);
-
-    // カラム追加用（エラー無視）
-    try { $pdo->exec("ALTER TABLE reflections ADD COLUMN workload_score INT DEFAULT 3"); } catch(Exception $e) {}
-    try { $pdo->exec("ALTER TABLE reflections ADD COLUMN improvement_score INT DEFAULT 3"); } catch(Exception $e) {}
-    // ★念のためここでもパスワードカラム追加を試みる（SQL実行忘れ防止）
-    try { $pdo->exec("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255) NOT NULL DEFAULT ''"); } catch(Exception $e) {}
-
 } catch (PDOException $e) {
-    die("<div style='text-align:center; padding:2rem;'><h3>System Initializing...</h3><p>データベース構成中です。10秒後にリロードしてください。<br>Error: " . $e->getMessage() . "</p></div>");
+    die("DB Error: " . $e->getMessage());
 }
 
 function get_uuid() {
-    return sprintf('%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
-        mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff),
-        mt_rand(0, 0x0fff) | 0x4000, mt_rand(0, 0x3fff) | 0x8000,
-        mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
-    );
+    return sprintf('%04x%04x-%04x-%04x-%04x-%04x%04x%04x', mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0x0fff) | 0x4000, mt_rand(0, 0x3fff) | 0x8000, mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff));
 }
 function h($str) { return htmlspecialchars($str, ENT_QUOTES, 'UTF-8'); }
 
@@ -77,28 +29,24 @@ function h($str) { return htmlspecialchars($str, ENT_QUOTES, 'UTF-8'); }
 // 2. ロジック処理
 // ==========================================
 
-// ▼▼▼ しっかり実装したログアウト機能 ▼▼▼
+// ログアウト
 if (isset($_GET['logout'])) {
-    $_SESSION = array(); // セッション変数を空にする
+    $_SESSION = array();
     if (ini_get("session.use_cookies")) {
         $params = session_get_cookie_params();
-        setcookie(session_name(), '', time() - 42000,
-            $params["path"], $params["domain"],
-            $params["secure"], $params["httponly"]
-        );
+        setcookie(session_name(), '', time() - 42000, $params["path"], $params["domain"], $params["secure"], $params["httponly"]);
     }
     session_destroy();
     header("Location: index.php");
     exit;
 }
 
-// ▼▼▼ しっかり実装したログイン/登録機能 ▼▼▼
+// ログイン・登録
 $error_message = "";
-
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'login') {
     $team = trim($_POST['team_name']);
     $name = trim($_POST['name']);
-    $pass = $_POST['password']; // パスワード
+    $pass = $_POST['password'];
 
     if ($team && $name && $pass) {
         $stmt = $pdo->prepare("SELECT * FROM users WHERE team_name = ? AND name = ?");
@@ -106,36 +54,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
         if (!$user) {
-            // --- 新規登録 ---
             $uuid = get_uuid();
-            $hash = password_hash($pass, PASSWORD_DEFAULT); // 暗号化
-            
+            $hash = password_hash($pass, PASSWORD_DEFAULT);
             $stmt = $pdo->prepare("INSERT INTO users (id, team_name, name, password_hash) VALUES (?, ?, ?, ?)");
             $stmt->execute([$uuid, $team, $name, $hash]);
-            
             session_regenerate_id(true);
             $_SESSION['user_id'] = $uuid;
             $_SESSION['name'] = $name;
             $_SESSION['team_name'] = $team;
-            header("Location: index.php");
-            exit;
+            header("Location: index.php"); exit;
         } else {
-            // --- 既存ログイン ---
-            // パスワード照合 (password_verify)
-            // ※古いユーザーなどパスワードが空の場合はそのまま通す等の調整も可能ですが、今回は厳密にチェックします
             if (password_verify($pass, $user['password_hash'])) {
                 session_regenerate_id(true);
                 $_SESSION['user_id'] = $user['id'];
                 $_SESSION['name'] = $user['name'];
                 $_SESSION['team_name'] = $user['team_name'];
-                header("Location: index.php");
-                exit;
+                header("Location: index.php"); exit;
             } else {
-                $error_message = "パスワードが間違っています。";
+                $error_message = "パスワードが違います";
             }
         }
-    } else {
-        $error_message = "全ての項目を入力してください。";
     }
 }
 
@@ -144,91 +82,193 @@ $current_user_id = $_SESSION['user_id'] ?? null;
 $current_user_name = $_SESSION['name'] ?? null;
 $current_team = $_SESSION['team_name'] ?? null;
 
-// 投稿処理
+// ★データ処理
 if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST') {
-    // 振り返り投稿
-    if (isset($_POST['action']) && $_POST['action'] === 'reflection') {
-        $image_path = '';
-        if (isset($_FILES['screenshot_file']) && $_FILES['screenshot_file']['error'] === UPLOAD_ERR_OK) {
-            $ext = pathinfo($_FILES['screenshot_file']['name'], PATHINFO_EXTENSION);
-            $filename = uniqid() . '.' . $ext;
-            if (move_uploaded_file($_FILES['screenshot_file']['tmp_name'], $upload_dir . $filename)) {
-                $image_path = 'uploads/' . $filename;
-            }
-        }
+    
+    // チーム目標更新
+    if (isset($_POST['action']) && $_POST['action'] === 'update_team_goal') {
+        $start = $_POST['start_date'];
+        $end = $_POST['end_date'];
+        
+        $stmt = $pdo->prepare("SELECT id, start_date FROM team_goals WHERE team_name = ? ORDER BY id DESC LIMIT 1");
+        $stmt->execute([$current_team]);
+        $latest = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        if (isset($_POST['prev_reflection_id']) && isset($_POST['plan_done_check'])) {
-            $stmt = $pdo->prepare("UPDATE reflections SET is_plan_done = 1 WHERE id = ?");
-            $stmt->execute([$_POST['prev_reflection_id']]);
+        if ($latest && $latest['start_date'] === $start) {
+            $stmt = $pdo->prepare("UPDATE team_goals SET goal_text = ?, end_date = ? WHERE id = ?");
+            $stmt->execute([$_POST['goal_text'], $end, $latest['id']]);
+        } else {
+            $stmt = $pdo->prepare("INSERT INTO team_goals (team_name, start_date, end_date, goal_text) VALUES (?, ?, ?, ?)");
+            $stmt->execute([$current_team, $start, $end, $_POST['goal_text']]);
         }
+        header("Location: index.php"); exit;
+    }
 
-        $stmt = $pdo->prepare("INSERT INTO reflections (user_id, screenshot_url, comment, next_plan, progress_score, workload_score, improvement_score) VALUES (?, ?, ?, ?, ?, ?, ?)");
-        $stmt->execute([
-            $current_user_id, 
-            $image_path, 
-            $_POST['comment'], 
-            $_POST['next_plan'], 
-            $_POST['progress_score'],
-            $_POST['workload_score'],
-            $_POST['improvement_score']
-        ]);
-        header("Location: index.php");
-        exit;
+    // タスク追加
+    if (isset($_POST['action']) && $_POST['action'] === 'add_task') {
+        $stmt = $pdo->prepare("INSERT INTO tasks (user_id, content) VALUES (?, ?)");
+        $stmt->execute([$current_user_id, $_POST['content']]);
+        header("Location: index.php"); exit;
     }
     
-    // メモ投稿
+    // タスク完了切り替え
+    if (isset($_POST['action']) && $_POST['action'] === 'toggle_task') {
+        $stmt = $pdo->prepare("UPDATE tasks SET is_done = NOT is_done WHERE id = ? AND user_id = ?");
+        $stmt->execute([$_POST['task_id'], $current_user_id]);
+        header("Location: index.php"); exit;
+    }
+
+    // 進捗の振り返り投稿
+    if (isset($_POST['action']) && $_POST['action'] === 'reflection') {
+        $screen_path = '';
+        if (isset($_FILES['screen_file']) && $_FILES['screen_file']['error'] === UPLOAD_ERR_OK) {
+            $ext = pathinfo($_FILES['screen_file']['name'], PATHINFO_EXTENSION);
+            $filename = 'screen_' . uniqid() . '.' . $ext;
+            if (move_uploaded_file($_FILES['screen_file']['tmp_name'], $upload_dir . $filename)) { $screen_path = 'uploads/' . $filename; }
+        }
+        $code_path = '';
+        if (isset($_FILES['code_file']) && $_FILES['code_file']['error'] === UPLOAD_ERR_OK) {
+            $ext = pathinfo($_FILES['code_file']['name'], PATHINFO_EXTENSION);
+            $filename = 'code_' . uniqid() . '.' . $ext;
+            if (move_uploaded_file($_FILES['code_file']['tmp_name'], $upload_dir . $filename)) { $code_path = 'uploads/' . $filename; }
+        }
+        $stmt = $pdo->prepare("INSERT INTO reflections (user_id, screenshot_url, code_url, comment, next_plan) VALUES (?, ?, ?, ?, ?)");
+        $stmt->execute([$current_user_id, $screen_path, $code_path, $_POST['comment'], ""]);
+        header("Location: index.php?tab=daily"); exit;
+    }
+
+    // 週次振り返り投稿
+    if (isset($_POST['action']) && $_POST['action'] === 'weekly_reflection') {
+        $stmt = $pdo->prepare("SELECT id FROM weekly_reflections WHERE user_id = ? AND goal_id = ?");
+        $stmt->execute([$current_user_id, $_POST['goal_id']]);
+        $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($existing) {
+            $stmt = $pdo->prepare("UPDATE weekly_reflections SET progress_score=?, workload_score=?, improvement_score=?, team_good=?, team_more=? WHERE id=?");
+            $stmt->execute([$_POST['progress_score'], $_POST['workload_score'], $_POST['improvement_score'], $_POST['team_good'], $_POST['team_more'], $existing['id']]);
+        } else {
+            $stmt = $pdo->prepare("INSERT INTO weekly_reflections (user_id, goal_id, progress_score, workload_score, improvement_score, team_good, team_more) VALUES (?, ?, ?, ?, ?, ?, ?)");
+            $stmt->execute([$current_user_id, $_POST['goal_id'], $_POST['progress_score'], $_POST['workload_score'], $_POST['improvement_score'], $_POST['team_good'], $_POST['team_more']]);
+        }
+        header("Location: index.php?tab=weekly&sub=share"); exit;
+    }
+
+    // 人格メモ投稿
     if (isset($_POST['action']) && $_POST['action'] === 'note') {
         $stmt = $pdo->prepare("INSERT INTO notes (author_id, author_name, target_user_name, type, content) VALUES (?, ?, ?, ?, ?)");
         $stmt->execute([$current_user_id, $current_user_name, $_POST['target_user_name'], $_POST['type'], $_POST['content']]);
-        header("Location: index.php?tab=notes");
-        exit;
+        header("Location: index.php?tab=daily&sub=personality"); exit;
+    }
+
+    // 中間振り返りリンク
+    if (isset($_POST['action']) && $_POST['action'] === 'add_intermediate') {
+        $stmt = $pdo->prepare("INSERT INTO intermediate_reviews (user_id, review_date, sheet_url) VALUES (?, ?, ?)");
+        $stmt->execute([$current_user_id, $_POST['review_date'], $_POST['sheet_url']]);
+        header("Location: index.php?tab=notes"); exit;
     }
 }
 
-// データ取得 & 集計
-$latest_reflection = null;
+// データ取得
+$team_goal_data = null;
+$team_goal_text = "目標未設定";
+$current_period = "期間未設定";
+$tasks_by_user = [];
 $team_members = [];
-$notes = [];
 $reflections = [];
-$team_stats = ['avg_progress' => 0, 'min_progress_user' => null, 'min_score' => 5];
+$notes = [];
+$weekly_data_list = [];
+$team_avg_percent = 0;
+$min_progress = 5;
+$intermediate_links = [];
+$archive_data = [];
 
 if ($is_logged_in) {
+    // メンバー
     $stmt = $pdo->prepare("SELECT * FROM users WHERE team_name = ?");
     $stmt->execute([$current_team]);
     $team_members = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    $stmt = $pdo->prepare("SELECT * FROM reflections WHERE user_id = ? ORDER BY created_at DESC LIMIT 1");
-    $stmt->execute([$current_user_id]);
-    $latest_reflection = $stmt->fetch(PDO::FETCH_ASSOC);
+    // ★現在のチーム目標
+    $stmt = $pdo->prepare("SELECT * FROM team_goals WHERE team_name = ? ORDER BY id DESC LIMIT 1");
+    $stmt->execute([$current_team]);
+    $team_goal_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($team_goal_data) {
+        $team_goal_text = $team_goal_data['goal_text'];
+        if ($team_goal_data['start_date'] && $team_goal_data['end_date']) {
+            $current_period = date('n/j', strtotime($team_goal_data['start_date'])) . ' 〜 ' . date('n/j', strtotime($team_goal_data['end_date']));
+        }
+    }
 
+    // タスク
+    foreach ($team_members as $m) {
+        $stmt = $pdo->prepare("SELECT * FROM tasks WHERE user_id = ? ORDER BY created_at ASC");
+        $stmt->execute([$m['id']]);
+        $tasks_by_user[$m['name']] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    // 進捗スレッド
+    $stmt = $pdo->prepare("SELECT r.*, u.name FROM reflections r JOIN users u ON r.user_id = u.id WHERE u.team_name = ? ORDER BY r.created_at DESC LIMIT 50");
+    $stmt->execute([$current_team]);
+    $reflections = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // 人格メモ
     $stmt = $pdo->prepare("SELECT * FROM notes WHERE author_id = ? ORDER BY created_at DESC");
     $stmt->execute([$current_user_id]);
     $notes = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    $stmt = $pdo->prepare("SELECT r.*, u.name FROM reflections r JOIN users u ON r.user_id = u.id WHERE u.team_name = ? ORDER BY r.created_at DESC LIMIT 30");
-    $stmt->execute([$current_team]);
-    $reflections = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    // 週次集計
+    if ($team_goal_data) {
+        $total_progress = 0;
+        $count_member = 0;
+        foreach ($team_members as $m) {
+            $stmt = $pdo->prepare("SELECT * FROM weekly_reflections WHERE user_id = ? AND goal_id = ?");
+            $stmt->execute([$m['id'], $team_goal_data['id']]);
+            $w_data = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    // 集計ロジック
-    $latest_scores = [];
-    foreach ($team_members as $member) {
-        $stmt = $pdo->prepare("SELECT progress_score FROM reflections WHERE user_id = ? ORDER BY created_at DESC LIMIT 1");
-        $stmt->execute([$member['id']]);
-        $res = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ($res) {
-            $score = $res['progress_score'];
-            $latest_scores[] = $score;
-            if ($score < $team_stats['min_score']) {
-                $team_stats['min_score'] = $score;
-                $team_stats['min_progress_user'] = $member['name'];
+            if ($w_data) {
+                $p_score = $w_data['progress_score'];
+                $weekly_data_list[] = [
+                    'name' => $m['name'],
+                    'progress' => $p_score,
+                    'workload' => $w_data['workload_score'],
+                    'improvement' => $w_data['improvement_score'],
+                    'good' => $w_data['team_good'],
+                    'more' => $w_data['team_more']
+                ];
+                $total_progress += $p_score;
+                $count_member++;
+                if ($p_score < $min_progress) { $min_progress = $p_score; }
+            } else {
+                $weekly_data_list[] = ['name' => $m['name'], 'progress' => '-', 'workload' => '-', 'improvement' => '-', 'good' => '', 'more' => ''];
             }
         }
+        if ($count_member > 0) {
+            $avg = $total_progress / $count_member;
+            $team_avg_percent = round(($avg / 5) * 100);
+        }
     }
-    if (count($latest_scores) > 0) {
-        $avg = array_sum($latest_scores) / count($latest_scores);
-        $team_stats['avg_progress'] = round(($avg / 5) * 100);
-    }
+
+    // 中間振り返り
+    $stmt = $pdo->prepare("SELECT * FROM intermediate_reviews WHERE user_id = ? ORDER BY review_date DESC");
+    $stmt->execute([$current_user_id]);
+    $intermediate_links = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // アーカイブ
+    $stmt = $pdo->prepare("
+        SELECT tg.*, wr.progress_score, wr.workload_score, wr.improvement_score, wr.team_good, wr.team_more 
+        FROM team_goals tg 
+        LEFT JOIN weekly_reflections wr ON tg.id = wr.goal_id AND wr.user_id = ?
+        WHERE tg.team_name = ? 
+        ORDER BY tg.start_date DESC
+    ");
+    $stmt->execute([$current_user_id, $current_team]);
+    $archive_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
+
+// 初期タブ判定
+$initial_tab = isset($_GET['tab']) ? $_GET['tab'] : 'dashboard';
+$initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress'; 
 ?>
 
 <!DOCTYPE html>
@@ -236,261 +276,412 @@ if ($is_logged_in) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sync | Team Growth</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <title>Sync</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
-    
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;500;700&display=swap" rel="stylesheet">
     <style>
-        :root { --primary: #4F46E5; --bg: #F3F4F6; }
-        body { font-family: 'Inter', sans-serif; background-color: var(--bg); color: #1f2937; }
-        .navbar { background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(10px); border-bottom: 1px solid #e5e7eb; }
-        .card { border: none; border-radius: 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); overflow: hidden; }
-        .btn-primary { background-color: var(--primary); border: none; border-radius: 10px; padding: 0.6rem 1.2rem; }
-        .form-control, .form-select { border-radius: 10px; padding: 0.7rem; }
-        .note-card { border-left: 5px solid #ddd; }
-        .my-good { background: #eff6ff; border-left-color: #3b82f6; }
-        .my-more { background: #fefce8; border-left-color: #eab308; }
-        .member-msg { background: #f0fdf4; border-left-color: #22c55e; }
-        .range-label { font-size: 0.8rem; font-weight: bold; color: #6b7280; display: flex; justify-content: space-between; margin-bottom: 5px; }
-        .range-value { font-size: 1.2rem; font-weight: bold; color: var(--primary); }
+        body { font-family: 'Noto Sans JP', sans-serif; background-color: #f4f4f4; overflow-x: hidden; }
+        
+        /* サイドバー */
+        .sidebar {
+            width: 120px;
+            height: 100vh;
+            background-color: #d9d9d9;
+            position: fixed;
+            left: 0;
+            top: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding-top: 2rem;
+            z-index: 1000;
+        }
+        .nav-btn {
+            width: 70px;
+            height: 70px;
+            background-color: white;
+            border-radius: 50%;
+            margin-bottom: 0.5rem;
+            border: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            transition: all 0.2s;
+        }
+        .nav-btn:hover, .nav-btn.active { background-color: #4F46E5; color: white; transform: scale(1.05); }
+        .nav-btn i { font-size: 1.5rem; }
+        .nav-label { font-size: 0.6rem; text-align: center; margin-bottom: 2rem; font-weight: bold; color: #555; }
+        .nav-arrow { font-size: 1.5rem; color: #333; margin-bottom: 1rem; }
+
+        /* メインコンテンツ */
+        .main-content { margin-left: 120px; padding: 2rem 4rem; min-height: 100vh; background-color: white; }
+        
+        /* デザイン要素 */
+        .section-header { text-align: center; margin-bottom: 2rem; }
+        .section-header h2 { font-size: 1.5rem; font-weight: bold; }
+        .gray-box { background-color: #d9d9d9; padding: 1.5rem; text-align: center; margin-bottom: 3rem; border-radius: 4px; }
+        
+        .sub-tab-container { display: flex; gap: 20px; margin-bottom: 2rem; align-items: center; }
+        .sub-tab-btn {
+            background-color: #d9d9d9;
+            color: #333;
+            padding: 15px 20px;
+            font-size: 1.2rem;
+            border: none;
+            cursor: pointer;
+            flex: 1; 
+            text-align: center;
+            font-weight: 700;
+            transition: 0.3s;
+        }
+        .sub-tab-btn.active { background-color: #d9d9d9; color: #333; border: 2px solid #333; }
+        .next-plan-btn {
+            background-color: #d9d9d9;
+            color: #333;
+            padding: 15px 20px;
+            font-size: 1rem;
+            border: none;
+            text-decoration: none;
+            text-align: center;
+            font-weight: 500;
+            display: block;
+            width: 200px;
+        }
+        
+        .form-area { background-color: #d9d9d9; padding: 2rem; border-radius: 4px; height: 100%; }
+        .timeline-area { background-color: #d9d9d9; padding: 2rem; border-radius: 4px; height: 700px; overflow-y: auto; }
+        .timeline-card { background: white; padding: 1.5rem; margin-bottom: 1rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+
+        .note-card-good { background-color: #fff9e6; border-left: 6px solid #ffc107; color: #856404; }
+        .note-card-more { background-color: #e6f2ff; border-left: 6px solid #17a2b8; color: #0c5460; }
+        .note-emoji { font-size: 1.5rem; margin-right: 0.5rem; }
+        .table-warning-row { background-color: #ffe6e6 !important; color: #dc3545; font-weight: bold; }
+
+        .login-wrapper { display: flex; justify-content: center; align-items: center; height: 100vh; margin-left: 0; background-color: #f4f4f4; }
+        .arrow-icon { font-size: 2rem; color: #333; font-weight: bold; }
     </style>
 </head>
 <body>
 
-<nav class="navbar sticky-top mb-4">
-    <div class="container">
-        <a class="navbar-brand fw-bold text-primary" href="index.php"><i class="bi bi-diagram-3-fill me-2"></i>Sync</a>
-        
-        <?php if ($is_logged_in): ?>
-            <div class="d-flex align-items-center gap-3">
-                <span class="small fw-bold">Team: <?= h($current_team) ?> / <?= h($current_user_name) ?></span>
-                <a href="?logout=true" class="btn btn-sm btn-outline-danger" onclick="return confirm('ログアウトしますか？');">
-                    <i class="bi bi-box-arrow-right"></i> ログアウト
-                </a>
-            </div>
-        <?php endif; ?>
+<?php if (!$is_logged_in): ?>
+    <div class="container login-wrapper">
+        <div class="card p-5 shadow-lg" style="width: 400px; border-radius: 20px;">
+            <h3 class="text-center fw-bold mb-4">Sync Login</h3>
+            <?php if ($error_message): ?><div class="alert alert-danger py-2"><?= h($error_message) ?></div><?php endif; ?>
+            <form method="post">
+                <input type="hidden" name="action" value="login">
+                <div class="mb-3"><label class="form-label small fw-bold">チーム名</label><input type="text" name="team_name" class="form-control" required></div>
+                <div class="mb-3"><label class="form-label small fw-bold">名前</label><input type="text" name="name" class="form-control" required></div>
+                <div class="mb-4"><label class="form-label small fw-bold">パスワード</label><input type="password" name="password" class="form-control" required></div>
+                <button type="submit" class="btn btn-dark w-100 py-2">Start</button>
+            </form>
+        </div>
     </div>
-</nav>
 
-<div class="container pb-5">
-    <?php if (!$is_logged_in): ?>
-        <div class="row justify-content-center mt-5">
-            <div class="col-md-4">
-                <div class="card p-4">
-                    <h4 class="text-center fw-bold mb-4">Login</h4>
-                    
-                    <?php if (!empty($error_message)): ?>
-                        <div class="alert alert-danger p-2 small"><?= h($error_message) ?></div>
+<?php else: ?>
+    <div class="sidebar">
+        <button class="nav-btn <?= $initial_tab === 'dashboard' ? 'active' : '' ?>" onclick="switchTab('dashboard')"><i class="bi bi-house-door-fill"></i></button>
+        <div class="nav-label">今週のPLAN</div>
+        <div class="nav-arrow"><i class="bi bi-chevron-down"></i></div>
+
+        <button class="nav-btn <?= $initial_tab === 'daily' ? 'active' : '' ?>" onclick="switchTab('daily')"><i class="bi bi-pencil-square"></i></button>
+        <div class="nav-label">毎回の<br>振り返り</div>
+        <div class="nav-arrow"><i class="bi bi-chevron-down"></i></div>
+
+        <button class="nav-btn <?= $initial_tab === 'weekly' ? 'active' : '' ?>" onclick="switchTab('weekly')"><i class="bi bi-calendar-check"></i></button>
+        <div class="nav-label">1週間の<br>振り返り</div>
+        <div class="nav-arrow"><i class="bi bi-chevron-down"></i></div>
+
+        <button class="nav-btn <?= $initial_tab === 'notes' ? 'active' : '' ?>" onclick="switchTab('notes')"><i class="bi bi-chat-heart-fill"></i></button>
+        <div class="nav-label">中間<br>Good&More</div>
+
+        <div class="mt-auto mb-4">
+            <a href="?logout=true" class="text-secondary" onclick="return confirm('ログアウトしますか？')"><i class="bi bi-box-arrow-left fs-3"></i></a>
+        </div>
+    </div>
+
+    <div class="main-content">
+        
+        <div id="tab-dashboard" class="content-section <?= $initial_tab !== 'dashboard' ? 'd-none' : '' ?>">
+            <div class="section-header"><h2>今週1週間のPLANはこちら</h2></div>
+            <div class="gray-box position-relative group">
+                <div class="badge bg-secondary mb-2" style="font-size: 0.9rem;"><?= h($current_period) ?></div>
+                <h5>チームとしての1週間の目標</h5>
+                <h3 class="fw-bold mt-2"><?= nl2br(h($team_goal_text)) ?></h3>
+                <button class="btn btn-sm btn-outline-secondary position-absolute top-0 end-0 m-2" onclick="document.getElementById('edit-goal-form').classList.toggle('d-none')">編集/次週設定</button>
+                
+                <form method="post" id="edit-goal-form" class="d-none mt-3 text-start bg-white p-3 rounded shadow-sm">
+                    <input type="hidden" name="action" value="update_team_goal">
+                    <div class="row g-2 mb-2">
+                        <div class="col-6"><label class="small fw-bold">開始日</label><input type="date" name="start_date" class="form-control form-control-sm" required value="<?= $team_goal_data['start_date'] ?? date('Y-m-d') ?>"></div>
+                        <div class="col-6"><label class="small fw-bold">終了日</label><input type="date" name="end_date" class="form-control form-control-sm" required value="<?= $team_goal_data['end_date'] ?? date('Y-m-d', strtotime('+6 days')) ?>"></div>
+                    </div>
+                    <label class="small fw-bold">目標テキスト</label>
+                    <input type="text" name="goal_text" class="form-control mb-2" value="<?= h($team_goal_text) ?>" required>
+                    <button type="submit" class="btn btn-dark btn-sm w-100">保存</button>
+                </form>
+            </div>
+            <div class="gray-box text-start p-4">
+                <h4 class="text-center mb-4 text-secondary">個人ごとに分けられたタスク一覧</h4>
+                <div class="row">
+                    <?php foreach ($team_members as $member): ?>
+                        <div class="col-md-6 mb-3">
+                            <div class="bg-white p-3 rounded">
+                                <h6 class="fw-bold border-bottom pb-2 mb-2"><i class="bi bi-person-circle"></i> <?= h($member['name']) ?></h6>
+                                <ul class="list-unstyled mb-2">
+                                    <?php if(isset($tasks_by_user[$member['name']])): foreach($tasks_by_user[$member['name']] as $task): ?>
+                                        <li class="d-flex align-items-center mb-1">
+                                            <?php if($member['name'] === $current_user_name): ?>
+                                                <form method="post" class="me-2"><input type="hidden" name="action" value="toggle_task"><input type="hidden" name="task_id" value="<?= $task['id'] ?>"><button type="submit" class="btn btn-sm p-0 border-0"><i class="bi <?= $task['is_done'] ? 'bi-check-circle-fill text-success' : 'bi-circle text-muted' ?>"></i></button></form>
+                                            <?php else: ?><i class="bi <?= $task['is_done'] ? 'bi-check-circle-fill text-success' : 'bi-circle text-muted' ?> me-2"></i><?php endif; ?>
+                                            <span class="<?= $task['is_done'] ? 'text-decoration-line-through text-muted' : '' ?>"><?= h($task['content']) ?></span>
+                                        </li>
+                                    <?php endforeach; endif; ?>
+                                </ul>
+                                <?php if($member['name'] === $current_user_name): ?>
+                                    <form method="post" class="d-flex gap-2"><input type="hidden" name="action" value="add_task"><input type="text" name="content" class="form-control form-control-sm" required><button type="submit" class="btn btn-sm btn-dark">+</button></form>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        </div>
+
+        <div id="tab-daily" class="content-section <?= $initial_tab !== 'daily' ? 'd-none' : '' ?>">
+            <div class="sub-tab-container">
+                <button id="btn-progress" class="sub-tab-btn <?= $initial_sub === 'progress' ? 'active' : '' ?>" onclick="switchSubTab('progress')">進捗の振り返り</button>
+                <button id="btn-personality" class="sub-tab-btn <?= $initial_sub === 'personality' ? 'active' : '' ?>" onclick="switchSubTab('personality')">人格の振り返り</button>
+            </div>
+            <div id="daily-progress" class="h-100 <?= $initial_sub !== 'progress' ? 'd-none' : '' ?>">
+                <div class="row h-100">
+                    <div class="col-md-5">
+                        <div class="form-area">
+                            <h5 class="fw-bold mb-3">投稿フォーム</h5>
+                            <form method="post" enctype="multipart/form-data">
+                                <input type="hidden" name="action" value="reflection">
+                                <div class="mb-3 p-3 bg-white rounded">
+                                    <label class="small fw-bold d-block mb-2">1. コードの写真 (Code)</label>
+                                    <input type="file" name="code_file" class="form-control form-control-sm mb-3" accept="image/*">
+                                    <label class="small fw-bold d-block mb-2">2. 実際の画面 (Screen)</label>
+                                    <input type="file" name="screen_file" class="form-control form-control-sm" accept="image/*">
+                                </div>
+                                <div class="mb-3"><label class="small fw-bold">コメント</label><textarea name="comment" class="form-control" rows="6" placeholder="実装した内容や、詰まっているポイントを共有しよう" required></textarea></div>
+                                <button type="submit" class="btn btn-dark w-100 fw-bold py-2 mt-2">保存する</button>
+                            </form>
+                        </div>
+                    </div>
+                    <div class="col-md-7">
+                        <div class="timeline-area">
+                            <h5 class="fw-bold mb-3">進捗共有スレッド一覧</h5>
+                            <?php if (empty($reflections)): ?><p class="text-muted text-center mt-5">まだ投稿がありません。</p><?php else: foreach ($reflections as $ref): ?>
+                                <div class="timeline-card">
+                                    <div class="d-flex justify-content-between align-items-center mb-2"><div class="d-flex align-items-center gap-2"><div class="bg-primary text-white rounded-circle d-flex align-items-center justify-content-center" style="width:32px;height:32px;font-weight:bold;"><?= substr(h($ref['name']), 0, 1) ?></div><span class="fw-bold"><?= h($ref['name']) ?></span></div><small class="text-muted"><?= date('m/d H:i', strtotime($ref['created_at'])) ?></small></div>
+                                    <p class="mb-3" style="font-size: 0.95rem; white-space: pre-wrap;"><?= h($ref['comment']) ?></p>
+                                    <div class="row g-2">
+                                        <?php if(!empty($ref['code_url'])): ?><div class="col-6"><div class="small fw-bold text-muted mb-1">Code</div><img src="<?= h($ref['code_url']) ?>" class="img-fluid rounded border w-100" style="height: 150px; object-fit: cover; cursor: pointer;" onclick="window.open(this.src)"></div><?php endif; ?>
+                                        <?php if(!empty($ref['screenshot_url'])): ?><div class="col-6"><div class="small fw-bold text-muted mb-1">Screen</div><img src="<?= h($ref['screenshot_url']) ?>" class="img-fluid rounded border w-100" style="height: 150px; object-fit: cover; cursor: pointer;" onclick="window.open(this.src)"></div><?php endif; ?>
+                                    </div>
+                                </div>
+                            <?php endforeach; endif; ?>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div id="daily-personality" class="h-100 <?= $initial_sub !== 'personality' ? 'd-none' : '' ?>">
+                <div class="row h-100">
+                    <div class="col-md-5">
+                        <div class="form-area">
+                            <h5 class="fw-bold mb-4">人格振り返りフォーム</h5>
+                            <form method="post">
+                                <input type="hidden" name="action" value="note">
+                                <div class="mb-3"><label class="small fw-bold d-block mb-1">対象者</label><select name="target_user_name" class="form-select bg-white"><option value="">プルダウン選択</option><option value="<?= h($current_user_name) ?>">自分 (Myself)</option><?php foreach ($team_members as $m): if($m['name'] !== $current_user_name): ?><option value="<?= h($m['name']) ?>"><?= h($m['name']) ?>さん</option><?php endif; endforeach; ?></select></div>
+                                <div class="mb-3"><label class="small fw-bold d-block mb-1">Good / More</label><select name="type" class="form-select bg-white"><option value="">プルダウン選択</option><option value="GOOD">Good (良い点)</option><option value="MORE">More (改善点)</option></select></div>
+                                <div class="mb-4"><label class="small fw-bold d-block mb-1">コメント</label><textarea name="content" class="form-control" rows="8" placeholder="具体的な行動や発言についてメモしておこう" required></textarea></div>
+                                <button type="submit" class="btn btn-light w-100 fw-bold py-2 border shadow-sm">保存する</button>
+                            </form>
+                        </div>
+                    </div>
+                    <div class="col-md-7">
+                        <div class="timeline-area">
+                            <h5 class="fw-bold mb-3">人格メモストック一覧 (非公開)</h5>
+                            <?php if (empty($notes)): ?><p class="text-muted text-center mt-5">まだメモがありません。</p><?php else: foreach ($notes as $note): 
+                                $card_class = ($note['type'] === 'GOOD') ? 'note-card-good' : 'note-card-more'; $emoji = ($note['type'] === 'GOOD') ? '😊' : '😢'; ?>
+                                <div class="timeline-card <?= $card_class ?>">
+                                    <div class="d-flex justify-content-between align-items-center mb-2"><div class="fw-bold d-flex align-items-center"><span class="note-emoji"><?= $emoji ?></span> To: <?= h($note['target_user_name']) ?></div><small style="opacity: 0.7;"><?= date('m/d', strtotime($note['created_at'])) ?></small></div>
+                                    <div class="fw-bold mb-1 small"><?= h($note['type']) ?></div><p class="mb-0" style="white-space: pre-wrap;"><?= h($note['content']) ?></p>
+                                </div>
+                            <?php endforeach; endif; ?>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="tab-weekly" class="content-section <?= $initial_tab !== 'weekly' ? 'd-none' : '' ?>">
+            <div class="sub-tab-container justify-content-between">
+                <div class="d-flex gap-3 flex-grow-1 align-items-center">
+                    <button id="btn-weekly-input" class="sub-tab-btn active" onclick="switchWeeklySubTab('input')">進捗の入力</button>
+                    <div class="arrow-icon"><i class="bi bi-chevron-right"></i></div>
+                    <button id="btn-weekly-share" class="sub-tab-btn" onclick="switchWeeklySubTab('share')">進捗の共有</button>
+                </div>
+                <div class="d-flex gap-2 align-items-center">
+                    <a href="index.php?tab=dashboard" class="next-plan-btn">次のPLAN設定</a>
+                    <button class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#archiveModal"><i class="bi bi-clock-history"></i> 過去の記録</button>
+                </div>
+            </div>
+
+            <div id="weekly-input">
+                <form method="post">
+                    <input type="hidden" name="action" value="weekly_reflection">
+                    <input type="hidden" name="goal_id" value="<?= $team_goal_data['id'] ?? '' ?>">
+                    <?php if(!$team_goal_data): ?><div class="alert alert-warning">まずDASHBOARDで期間と目標を設定してください。</div><?php else: ?>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="form-area">
+                                    <h5 class="fw-bold mb-4">数値入力 (<?= h($current_period) ?>)</h5>
+                                    <div class="mb-4"><label class="d-flex justify-content-between fw-bold mb-2"><span>進捗</span><span class="text-primary" id="val_p">3</span></label><input type="range" name="progress_score" class="form-range" min="1" max="5" value="3" oninput="document.getElementById('val_p').innerText=this.value"></div>
+                                    <div class="mb-4"><label class="d-flex justify-content-between fw-bold mb-2"><span>負荷</span><span class="text-primary" id="val_w">3</span></label><input type="range" name="workload_score" class="form-range" min="1" max="5" value="3" oninput="document.getElementById('val_w').innerText=this.value"></div>
+                                    <div class="mb-4"><label class="d-flex justify-content-between fw-bold mb-2"><span>改善度</span><span class="text-primary" id="val_i">3</span></label><input type="range" name="improvement_score" class="form-range" min="1" max="5" value="3" oninput="document.getElementById('val_i').innerText=this.value"></div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-area d-flex flex-column h-100">
+                                    <h5 class="fw-bold mb-4">チームへの Good & More</h5>
+                                    <div class="mb-3"><label class="fw-bold small mb-1">Good</label><textarea name="team_good" class="form-control" rows="4" required></textarea></div>
+                                    <div class="mb-3"><label class="fw-bold small mb-1">More</label><textarea name="team_more" class="form-control" rows="4" required></textarea></div>
+                                    <div class="mt-auto text-end"><button type="submit" class="btn btn-secondary px-5 py-2">共有する</button></div>
+                                </div>
+                            </div>
+                        </div>
                     <?php endif; ?>
-
-                    <form method="post">
-                        <input type="hidden" name="action" value="login">
-                        
-                        <div class="mb-3">
-                            <label class="form-label small fw-bold">チーム名</label>
-                            <input type="text" name="team_name" class="form-control" required placeholder="posse_team1">
-                        </div>
-                        
-                        <div class="mb-3">
-                            <label class="form-label small fw-bold">名前</label>
-                            <input type="text" name="name" class="form-control" required placeholder="Taro">
-                        </div>
-
-                        <div class="mb-4">
-                            <label class="form-label small fw-bold">パスワード</label>
-                            <input type="password" name="password" class="form-control" required placeholder="半角英数字">
-                            <div class="form-text text-xs">初回は入力したパスワードで新規登録されます</div>
-                        </div>
-
-                        <button type="submit" class="btn btn-primary w-100">Login / Register</button>
-                    </form>
-                </div>
+                </form>
             </div>
-        </div>
-    <?php else: ?>
-
-        <div class="card mb-4 bg-white">
-            <div class="card-body">
-                <div class="row align-items-center">
-                    <div class="col-md-8 mb-3 mb-md-0">
-                        <h6 class="text-muted fw-bold mb-2"><i class="bi bi-speedometer2 me-2"></i>チーム全体の進捗率 (Average)</h6>
-                        <div class="progress" style="height: 25px; border-radius: 12px;">
-                            <div class="progress-bar bg-primary progress-bar-striped progress-bar-animated" 
-                                 role="progressbar" style="width: <?= $team_stats['avg_progress'] ?>%">
-                                 <?= $team_stats['avg_progress'] ?>%
-                            </div>
+            
+            <div id="weekly-share" class="d-none">
+                <div class="row">
+                    <div class="col-md-7">
+                        <div class="form-area">
+                            <h5 class="fw-bold mb-3">チーム全体の進捗 (平均: <?= h($current_period) ?>)</h5>
+                            <div class="progress mb-5" style="height: 30px;"><div class="progress-bar bg-success" role="progressbar" style="width: <?= $team_avg_percent ?>%; font-weight:bold; font-size:1.1rem;"><?= $team_avg_percent ?>%</div></div>
+                            <table class="table table-bordered bg-white text-center align-middle">
+                                <thead class="table-light"><tr><th>Name</th><th>進捗</th><th>負荷</th><th>改善度</th></tr></thead>
+                                <tbody>
+                                    <?php foreach ($weekly_data_list as $wd): $is_warning = ($wd['progress'] !== '-' && $wd['progress'] == $min_progress); ?>
+                                        <tr class="<?= $is_warning ? 'table-warning-row' : '' ?>"><td class="fw-bold"><?= h($wd['name']) ?></td><td><?= h($wd['progress']) ?></td><td><?= h($wd['workload']) ?></td><td><?= h($wd['improvement']) ?></td></tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                            <?php if($min_progress <= 2): ?><p class="text-danger small mt-2 fw-bold text-center">※ 進捗が遅れているメンバーがいます。</p><?php endif; ?>
                         </div>
                     </div>
-                    <div class="col-md-4">
-                        <?php if ($team_stats['min_progress_user'] && $team_stats['min_score'] <= 2): ?>
-                            <div class="alert alert-danger mb-0 py-2 border-0 rounded-3 shadow-sm">
-                                <i class="bi bi-exclamation-circle-fill me-1"></i>
-                                <strong>SOS!</strong> <?= h($team_stats['min_progress_user']) ?>さんが遅れています(Lv.<?= $team_stats['min_score'] ?>)
-                            </div>
-                        <?php else: ?>
-                            <div class="alert alert-success mb-0 py-2 border-0 rounded-3">
-                                <i class="bi bi-check-circle-fill me-1"></i> 順調です！この調子！
-                            </div>
-                        <?php endif; ?>
+                    <div class="col-md-5">
+                        <div class="form-area" style="overflow-y:auto; height: 500px;">
+                            <h5 class="fw-bold mb-4">チームへの Good & More 全体</h5>
+                            <?php foreach ($weekly_data_list as $wd): ?>
+                                <?php if (!empty($wd['good'])): ?><div class="note-card-good p-3 mb-3 rounded shadow-sm"><div class="fw-bold small mb-1"><i class="bi bi-emoji-smile-fill"></i> <?= h($wd['name']) ?> : Good</div><div class="small"><?= nl2br(h($wd['good'])) ?></div></div><?php endif; ?>
+                                <?php if (!empty($wd['more'])): ?><div class="note-card-more p-3 mb-3 rounded shadow-sm"><div class="fw-bold small mb-1"><i class="bi bi-emoji-frown-fill"></i> <?= h($wd['name']) ?> : More</div><div class="small"><?= nl2br(h($wd['more'])) ?></div></div><?php endif; ?>
+                            <?php endforeach; ?>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <ul class="nav nav-tabs mb-4" id="myTab" role="tablist">
-            <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#daily">PDCA振り返り</button></li>
-            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#notes">3色ストックメモ</button></li>
-        </ul>
+        <div id="tab-notes" class="content-section <?= $initial_tab !== 'notes' ? 'd-none' : '' ?>">
+            <div class="section-header"><h2>中間 Good & More</h2></div>
+            <div class="row justify-content-center">
+                <div class="col-md-8">
+                    <div class="gray-box text-start p-4 mb-4">
+                        <h5 class="fw-bold mb-3"><i class="bi bi-link-45deg"></i> スプレッドシートのリンクを記録</h5>
+                        <form method="post" class="d-flex align-items-end gap-3"><input type="hidden" name="action" value="add_intermediate"><div class="flex-grow-1"><label class="small fw-bold mb-1">実施日</label><input type="date" name="review_date" class="form-control" required value="<?= date('Y-m-d') ?>"></div><div class="flex-grow-1" style="flex-basis: 50%;"><label class="small fw-bold mb-1">スプレッドシートのリンク (URL)</label><input type="url" name="sheet_url" class="form-control" placeholder="https://docs.google.com/..." required></div><button type="submit" class="btn btn-dark" style="min-width: 100px;">追加</button></form>
+                    </div>
+                    <div class="timeline-area bg-white border" style="height: auto; min-height: 300px;">
+                        <h5 class="fw-bold mb-3 text-secondary">過去の実施ログ</h5>
+                        <?php if(empty($intermediate_links)): ?><p class="text-center text-muted py-5">まだ記録がありません。</p><?php else: ?><div class="list-group"><?php foreach($intermediate_links as $link): ?><a href="<?= h($link['sheet_url']) ?>" target="_blank" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center p-3"><div><h5 class="mb-1 fw-bold"><i class="bi bi-file-earmark-spreadsheet text-success me-2"></i><?= date('Y年n月j日', strtotime($link['review_date'])) ?> 実施分</h5><small class="text-muted"><?= h($link['sheet_url']) ?></small></div><span class="badge bg-primary rounded-pill">Open <i class="bi bi-box-arrow-up-right ms-1"></i></span></a><?php endforeach; ?></div><?php endif; ?>
+                    </div>
+                </div>
+            </div>
+        </div>
 
-        <div class="tab-content">
-            <div class="tab-pane fade show active" id="daily">
-                <div class="row g-4">
-                    <div class="col-lg-5">
-                        <div class="card h-100">
-                            <div class="card-header bg-white fw-bold"><i class="bi bi-pencil-square text-primary me-2"></i>今日の振り返り</div>
-                            <div class="card-body">
-                                <form method="post" enctype="multipart/form-data"> 
-                                    <input type="hidden" name="action" value="reflection">
-                                    
-                                    <?php if ($latest_reflection): ?>
-                                        <div class="p-3 mb-4 rounded-3 bg-light border border-warning">
-                                            <input type="hidden" name="prev_reflection_id" value="<?= $latest_reflection['id'] ?>">
-                                            <div class="form-check">
-                                                <input type="checkbox" name="plan_done_check" class="form-check-input" <?= $latest_reflection['is_plan_done'] ? 'checked disabled' : '' ?>>
-                                                <label class="form-check-label fw-bold">前回の宣言: <?= h($latest_reflection['next_plan']) ?></label>
+    </div>
+
+    <div class="modal fade" id="archiveModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title fw-bold">過去の記録 (アーカイブ)</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body bg-light">
+                    <?php if(empty($archive_data)): ?>
+                        <p class="text-center text-muted py-3">過去の記録はまだありません。</p>
+                    <?php else: ?>
+                        <div class="accordion" id="archiveAccordion">
+                            <?php foreach($archive_data as $i => $arc): ?>
+                                <div class="accordion-item mb-3 border shadow-sm">
+                                    <h2 class="accordion-header">
+                                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse<?= $i ?>">
+                                            <div class="d-flex flex-column">
+                                                <span class="fw-bold"><?= h(date('Y/m/d', strtotime($arc['start_date']))) ?> 〜 <?= h(date('m/d', strtotime($arc['end_date']))) ?></span>
+                                                <span class="small text-muted text-truncate" style="max-width:400px;"><?= h($arc['goal_text']) ?></span>
                                             </div>
+                                        </button>
+                                    </h2>
+                                    <div id="collapse<?= $i ?>" class="accordion-collapse collapse" data-bs-parent="#archiveAccordion">
+                                        <div class="accordion-body">
+                                            <?php if($arc['progress_score']): ?>
+                                                <div class="row text-center mb-3">
+                                                    <div class="col"><strong>進捗:</strong> <?= h($arc['progress_score']) ?></div>
+                                                    <div class="col"><strong>負荷:</strong> <?= h($arc['workload_score']) ?></div>
+                                                    <div class="col"><strong>改善:</strong> <?= h($arc['improvement_score']) ?></div>
+                                                </div>
+                                                <div class="card mb-2 border-warning"><div class="card-header bg-warning bg-opacity-10 py-1 fw-bold">Good</div><div class="card-body py-2"><?= nl2br(h($arc['team_good'])) ?></div></div>
+                                                <div class="card border-info"><div class="card-header bg-info bg-opacity-10 py-1 fw-bold">More</div><div class="card-body py-2"><?= nl2br(h($arc['team_more'])) ?></div></div>
+                                            <?php else: ?>
+                                                <div class="text-muted small">この期間の振り返り記録はありません。</div>
+                                            <?php endif; ?>
                                         </div>
-                                    <?php endif; ?>
-
-                                    <div class="mb-4 p-3 bg-light rounded-3">
-                                        <div class="mb-3">
-                                            <div class="range-label"><span>🚀 進捗 (Progress)</span> <span id="val_p" class="range-value">3</span></div>
-                                            <input type="range" name="progress_score" class="form-range" min="1" max="5" value="3" oninput="document.getElementById('val_p').innerText=this.value">
-                                        </div>
-                                        <div class="mb-3">
-                                            <div class="range-label"><span>⚖️ 負荷 (Workload)</span> <span id="val_w" class="range-value">3</span></div>
-                                            <input type="range" name="workload_score" class="form-range" min="1" max="5" value="3" oninput="document.getElementById('val_w').innerText=this.value">
-                                        </div>
-                                        <div>
-                                            <div class="range-label"><span>💡 改善度 (Kaizen)</span> <span id="val_i" class="range-value">3</span></div>
-                                            <input type="range" name="improvement_score" class="form-range" min="1" max="5" value="3" oninput="document.getElementById('val_i').innerText=this.value">
-                                        </div>
-                                    </div>
-                                    
-                                    <div class="mb-3">
-                                        <label class="form-label small fw-bold">📸 スクリーンショット</label>
-                                        <input type="file" name="screenshot_file" class="form-control" accept="image/*">
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label small fw-bold">コメント</label>
-                                        <textarea name="comment" class="form-control" rows="3" required placeholder="事実・原因・発見..."></textarea>
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="form-label small fw-bold text-primary">🚩 Next Plan (明日やること)</label>
-                                        <input type="text" name="next_plan" class="form-control" required>
-                                    </div>
-                                    <button type="submit" class="btn btn-primary w-100">投稿する</button>
-                                </form>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="col-lg-7">
-                        <h6 class="text-muted fw-bold mb-3">みんなの活動記録</h6>
-                        <?php foreach ($reflections as $ref): ?>
-                            <div class="card mb-3">
-                                <div class="card-body">
-                                    <div class="d-flex justify-content-between align-items-center mb-2">
-                                        <div class="fw-bold d-flex align-items-center gap-2">
-                                            <div class="bg-primary text-white rounded-circle d-flex align-items-center justify-content-center" style="width:30px;height:30px;"><?= substr(h($ref['name']),0,1) ?></div>
-                                            <?= h($ref['name']) ?>
-                                        </div>
-                                        <small class="text-muted"><?= date('m/d H:i', strtotime($ref['created_at'])) ?></small>
-                                    </div>
-
-                                    <div class="d-flex gap-2 mb-3">
-                                        <span class="badge bg-primary bg-opacity-10 text-primary border border-primary">進捗: <?= $ref['progress_score'] ?></span>
-                                        <span class="badge bg-secondary bg-opacity-10 text-secondary border">負荷: <?= $ref['workload_score'] ?? '-' ?></span>
-                                        <span class="badge bg-warning bg-opacity-10 text-dark border border-warning">改善: <?= $ref['improvement_score'] ?? '-' ?></span>
-                                    </div>
-
-                                    <p class="card-text"><?= nl2br(h($ref['comment'])) ?></p>
-                                    
-                                    <?php if($ref['screenshot_url']): ?>
-                                        <div class="mb-3">
-                                            <img src="<?= h($ref['screenshot_url']) ?>" class="img-fluid rounded border" style="max-height: 200px;">
-                                        </div>
-                                    <?php endif; ?>
-
-                                    <div class="alert alert-light border py-2 d-flex justify-content-between align-items-center">
-                                        <small><strong>Next:</strong> <?= h($ref['next_plan']) ?></small>
-                                        <?php if ($ref['is_plan_done']): ?><span class="badge bg-success rounded-pill">Done</span><?php endif; ?>
                                     </div>
                                 </div>
-                            </div>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-            </div>
-
-            <div class="tab-pane fade" id="notes">
-                <div class="row g-4">
-                    <div class="col-md-4">
-                        <div class="card">
-                            <div class="card-header bg-white fw-bold">メモをストック</div>
-                            <div class="card-body">
-                                <form method="post">
-                                    <input type="hidden" name="action" value="note">
-                                    <div class="mb-3">
-                                        <label class="small fw-bold">対象</label>
-                                        <select name="target_user_name" class="form-select">
-                                            <option value="<?= h($current_user_name) ?>">自分 (Myself)</option>
-                                            <?php foreach ($team_members as $m): if($m['name'] !== $current_user_name): ?>
-                                                <option value="<?= h($m['name']) ?>"><?= h($m['name']) ?>さん</option>
-                                            <?php endif; endforeach; ?>
-                                        </select>
-                                    </div>
-                                    <div class="mb-3">
-                                        <label class="small fw-bold">種類</label>
-                                        <div class="btn-group w-100">
-                                            <input type="radio" class="btn-check" name="type" id="t1" value="GOOD" checked><label class="btn btn-outline-primary" for="t1">GOOD</label>
-                                            <input type="radio" class="btn-check" name="type" id="t2" value="MORE"><label class="btn btn-outline-warning" for="t2">MORE</label>
-                                        </div>
-                                    </div>
-                                    <div class="mb-3"><textarea name="content" class="form-control" rows="4" required></textarea></div>
-                                    <button type="submit" class="btn btn-dark w-100">保存</button>
-                                </form>
-                            </div>
+                            <?php endforeach; ?>
                         </div>
-                    </div>
-                    <div class="col-md-8">
-                        <h6 class="text-muted fw-bold">Stock List</h6>
-                        <div class="row g-2">
-                        <?php foreach ($notes as $note): 
-                            $cls = "member-msg"; 
-                            if ($note['target_user_name'] === $current_user_name) {
-                                $cls = ($note['type'] === 'GOOD') ? "my-good" : "my-more";
-                            }
-                        ?>
-                            <div class="col-12">
-                                <div class="card note-card <?= $cls ?> p-3">
-                                    <div class="d-flex justify-content-between">
-                                        <strong>To: <?= h($note['target_user_name']) ?> <span class="badge bg-white border text-dark"><?= h($note['type']) ?></span></strong>
-                                        <small class="text-muted"><?= substr($note['created_at'], 5, 5) ?></small>
-                                    </div>
-                                    <p class="mb-0 mt-1"><?= nl2br(h($note['content'])) ?></p>
-                                </div>
-                            </div>
-                        <?php endforeach; ?>
-                        </div>
-                    </div>
+                    <?php endif; ?>
                 </div>
             </div>
         </div>
-    <?php endif; ?>
-</div>
+    </div>
 
+<?php endif; ?>
+
+<script>
+function switchTab(tabName) {
+    document.querySelectorAll('.content-section').forEach(el => el.classList.add('d-none'));
+    document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
+    document.getElementById('tab-' + tabName).classList.remove('d-none');
+    event.currentTarget.classList.add('active');
+}
+function switchSubTab(subName) {
+    document.getElementById('daily-progress').classList.add('d-none');
+    document.getElementById('daily-personality').classList.add('d-none');
+    document.getElementById('daily-' + subName).classList.remove('d-none');
+    document.getElementById('btn-progress').classList.remove('active');
+    document.getElementById('btn-personality').classList.remove('active');
+    document.getElementById('btn-' + subName).classList.add('active');
+}
+function switchWeeklySubTab(subName) {
+    document.getElementById('weekly-input').classList.add('d-none');
+    document.getElementById('weekly-share').classList.add('d-none');
+    document.getElementById('btn-weekly-input').classList.remove('active');
+    document.getElementById('btn-weekly-share').classList.remove('active');
+    document.getElementById('weekly-' + subName).classList.remove('d-none');
+    document.getElementById('btn-weekly-' + subName).classList.add('active');
+}
+<?php if(isset($_GET['tab']) && $_GET['tab'] == 'weekly' && isset($_GET['sub']) && $_GET['sub'] == 'share'): ?>switchWeeklySubTab('share');<?php endif; ?>
+</script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
