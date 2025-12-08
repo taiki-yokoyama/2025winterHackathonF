@@ -1,6 +1,10 @@
 <?php
 session_start();
 
+// CSRF トークン生成
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
 // ==========================================
 // 1. 設定 & DB接続
 // ==========================================
@@ -25,6 +29,29 @@ function get_uuid() {
 }
 function h($str) { return htmlspecialchars($str, ENT_QUOTES, 'UTF-8'); }
 
+// アップロード検証 (画像限定, サイズ上限)
+function is_allowed_image($tmp_path, $orig_name) {
+    $maxBytes = 2 * 1024 * 1024; // 2MB
+    if (!is_uploaded_file($tmp_path)) return false;
+    if (filesize($tmp_path) > $maxBytes) return false;
+    $info = @getimagesize($tmp_path);
+    if ($info === false) return false;
+    $mime = $info['mime'];
+    $allowed = ['image/jpeg','image/png','image/gif','image/webp'];
+    if (!in_array($mime, $allowed, true)) return false;
+    // 拡張子チェック
+    $ext = strtolower(pathinfo($orig_name, PATHINFO_EXTENSION));
+    $allowedExt = ['jpg','jpeg','png','gif','webp'];
+    return in_array($ext, $allowedExt, true);
+}
+
+function safe_filename($prefix, $orig_name) {
+    $ext = pathinfo($orig_name, PATHINFO_EXTENSION);
+    $ext = preg_replace('/[^a-zA-Z0-9]/', '', $ext);
+    $name = $prefix . '_' . bin2hex(random_bytes(8));
+    if ($ext) $name .= '.' . $ext;
+    return $name;
+}
 // ==========================================
 // 2. ロジック処理
 // ==========================================
@@ -48,7 +75,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $name = trim($_POST['name']);
     $pass = $_POST['password'];
 
-    if ($team && $name && $pass) {
+    // CSRF 検証
+    if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+        $error_message = "不正なアクセスです";
+    }
+
+    if (empty($error_message) && $team && $name && $pass) {
         $stmt = $pdo->prepare("SELECT * FROM users WHERE team_name = ? AND name = ?");
         $stmt->execute([$team, $name]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -84,7 +116,12 @@ $current_team = $_SESSION['team_name'] ?? null;
 
 // ★データ処理
 if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    // CSRF 検証 (ログイン後フォームすべて)
+    if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+        $error_message = "不正なアクセスです";
+    }
     
+    if (empty($error_message)) {
     // チーム目標更新
     if (isset($_POST['action']) && $_POST['action'] === 'update_team_goal') {
         $start = $_POST['start_date'];
@@ -122,15 +159,21 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['action']) && $_POST['action'] === 'reflection') {
         $screen_path = '';
         if (isset($_FILES['screen_file']) && $_FILES['screen_file']['error'] === UPLOAD_ERR_OK) {
-            $ext = pathinfo($_FILES['screen_file']['name'], PATHINFO_EXTENSION);
-            $filename = 'screen_' . uniqid() . '.' . $ext;
-            if (move_uploaded_file($_FILES['screen_file']['tmp_name'], $upload_dir . $filename)) { $screen_path = 'uploads/' . $filename; }
+            if (is_allowed_image($_FILES['screen_file']['tmp_name'], $_FILES['screen_file']['name'])) {
+                $filename = safe_filename('screen', $_FILES['screen_file']['name']);
+                if (move_uploaded_file($_FILES['screen_file']['tmp_name'], $upload_dir . $filename)) { $screen_path = 'uploads/' . $filename; }
+            } else {
+                $error_message = 'スクリーンショットは画像 (最大2MB) を指定してください。';
+            }
         }
         $code_path = '';
         if (isset($_FILES['code_file']) && $_FILES['code_file']['error'] === UPLOAD_ERR_OK) {
-            $ext = pathinfo($_FILES['code_file']['name'], PATHINFO_EXTENSION);
-            $filename = 'code_' . uniqid() . '.' . $ext;
-            if (move_uploaded_file($_FILES['code_file']['tmp_name'], $upload_dir . $filename)) { $code_path = 'uploads/' . $filename; }
+            if (is_allowed_image($_FILES['code_file']['tmp_name'], $_FILES['code_file']['name'])) {
+                $filename = safe_filename('code', $_FILES['code_file']['name']);
+                if (move_uploaded_file($_FILES['code_file']['tmp_name'], $upload_dir . $filename)) { $code_path = 'uploads/' . $filename; }
+            } else {
+                $error_message = 'コード画像は画像 (最大2MB) を指定してください。';
+            }
         }
         $stmt = $pdo->prepare("INSERT INTO reflections (user_id, screenshot_url, code_url, comment, next_plan) VALUES (?, ?, ?, ?, ?)");
         $stmt->execute([$current_user_id, $screen_path, $code_path, $_POST['comment'], ""]);
@@ -165,6 +208,7 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt = $pdo->prepare("INSERT INTO intermediate_reviews (user_id, review_date, sheet_url) VALUES (?, ?, ?)");
         $stmt->execute([$current_user_id, $_POST['review_date'], $_POST['sheet_url']]);
         header("Location: index.php?tab=notes"); exit;
+    }
     }
 }
 
@@ -490,7 +534,7 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
             background-color: var(--color-bg-dark) !important;
             color: var(--color-accent) !important; /* ミント */
         }
-        
+
         /* フォームのラベル等を茶色系に */
         .form-label, .fw-bold { color: var(--color-bg-dark); }
         .text-secondary { color: #887060 !important; }
@@ -515,6 +559,7 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
             <?php if ($error_message): ?><div class="alert alert-danger py-2"><?= h($error_message) ?></div><?php endif; ?>
             <form method="post">
                 <input type="hidden" name="action" value="login">
+                <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token']) ?>">
                 <div class="mb-3"><label class="form-label small fw-bold">チーム名</label><input type="text" name="team_name" class="form-control" required placeholder="posse_team1"></div>
                 <div class="mb-3"><label class="form-label small fw-bold">名前</label><input type="text" name="name" class="form-control" required placeholder="Taro"></div>
                 <div class="mb-4"><label class="form-label small fw-bold">パスワード</label><input type="password" name="password" class="form-control" required placeholder="半角英数字"></div>
@@ -537,19 +582,19 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
     </header>
 
     <div class="sidebar">
-        <button class="nav-btn <?= $initial_tab === 'dashboard' ? 'active' : '' ?>" onclick="switchTab('dashboard')"><i class="bi bi-house-door-fill"></i></button>
+        <button class="nav-btn <?= $initial_tab === 'dashboard' ? 'active' : '' ?>" onclick="switchTab(this,'dashboard')"><i class="bi bi-house-door-fill"></i></button>
         <div class="nav-label">今週のPLAN</div>
         <div class="nav-arrow"><i class="bi bi-chevron-down"></i></div>
 
-        <button class="nav-btn <?= $initial_tab === 'daily' ? 'active' : '' ?>" onclick="switchTab('daily')"><i class="bi bi-pencil-square"></i></button>
+        <button class="nav-btn <?= $initial_tab === 'daily' ? 'active' : '' ?>" onclick="switchTab(this,'daily')"><i class="bi bi-pencil-square"></i></button>
         <div class="nav-label">毎回の<br>振り返り</div>
         <div class="nav-arrow"><i class="bi bi-chevron-down"></i></div>
 
-        <button class="nav-btn <?= $initial_tab === 'weekly' ? 'active' : '' ?>" onclick="switchTab('weekly')"><i class="bi bi-calendar-check"></i></button>
+        <button class="nav-btn <?= $initial_tab === 'weekly' ? 'active' : '' ?>" onclick="switchTab(this,'weekly')"><i class="bi bi-calendar-check"></i></button>
         <div class="nav-label">1週間の<br>振り返り</div>
         <div class="nav-arrow"><i class="bi bi-chevron-down"></i></div>
 
-        <button class="nav-btn <?= $initial_tab === 'notes' ? 'active' : '' ?>" onclick="switchTab('notes')"><i class="bi bi-chat-heart-fill"></i></button>
+        <button class="nav-btn <?= $initial_tab === 'notes' ? 'active' : '' ?>" onclick="switchTab(this,'notes')"><i class="bi bi-chat-heart-fill"></i></button>
         <div class="nav-label">中間<br>Good&More</div>
     </div>
 
@@ -565,6 +610,7 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
                 
                 <form method="post" id="edit-goal-form" class="d-none mt-3 text-start bg-white p-3 rounded shadow-sm">
                     <input type="hidden" name="action" value="update_team_goal">
+                    <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token']) ?>">
                     <div class="row g-2 mb-2">
                         <div class="col-6"><label class="small fw-bold">開始日</label><input type="date" name="start_date" class="form-control form-control-sm" required value="<?= $team_goal_data['start_date'] ?? date('Y-m-d') ?>"></div>
                         <div class="col-6"><label class="small fw-bold">終了日</label><input type="date" name="end_date" class="form-control form-control-sm" required value="<?= $team_goal_data['end_date'] ?? date('Y-m-d', strtotime('+6 days')) ?>"></div>
@@ -585,14 +631,24 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
                                     <?php if(isset($tasks_by_user[$member['name']])): foreach($tasks_by_user[$member['name']] as $task): ?>
                                         <li class="d-flex align-items-center mb-1">
                                             <?php if($member['name'] === $current_user_name): ?>
-                                                <form method="post" class="me-2"><input type="hidden" name="action" value="toggle_task"><input type="hidden" name="task_id" value="<?= $task['id'] ?>"><button type="submit" class="btn btn-sm p-0 border-0"><i class="bi <?= $task['is_done'] ? 'bi-check-circle-fill text-success' : 'bi-circle text-muted' ?>"></i></button></form>
+                                                <form method="post" class="me-2">
+                                                    <input type="hidden" name="action" value="toggle_task">
+                                                    <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token']) ?>">
+                                                    <input type="hidden" name="task_id" value="<?= $task['id'] ?>">
+                                                    <button type="submit" class="btn btn-sm p-0 border-0"><i class="bi <?= $task['is_done'] ? 'bi-check-circle-fill text-success' : 'bi-circle text-muted' ?>"></i></button>
+                                                </form>
                                             <?php else: ?><i class="bi <?= $task['is_done'] ? 'bi-check-circle-fill text-success' : 'bi-circle text-muted' ?> me-2"></i><?php endif; ?>
                                             <span class="<?= $task['is_done'] ? 'text-decoration-line-through text-muted' : '' ?>"><?= h($task['content']) ?></span>
                                         </li>
                                     <?php endforeach; endif; ?>
                                 </ul>
                                 <?php if($member['name'] === $current_user_name): ?>
-                                    <form method="post" class="d-flex gap-2"><input type="hidden" name="action" value="add_task"><input type="text" name="content" class="form-control form-control-sm" required placeholder="タスク追加"><button type="submit" class="btn btn-sm btn-dark">+</button></form>
+                                    <form method="post" class="d-flex gap-2">
+                                        <input type="hidden" name="action" value="add_task">
+                                        <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token']) ?>">
+                                        <input type="text" name="content" class="form-control form-control-sm" required placeholder="タスク追加">
+                                        <button type="submit" class="btn btn-sm btn-dark">+</button>
+                                    </form>
                                 <?php endif; ?>
                             </div>
                         </div>
@@ -603,8 +659,8 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
 
         <div id="tab-daily" class="content-section <?= $initial_tab !== 'daily' ? 'd-none' : '' ?>">
             <div class="sub-tab-container">
-                <button id="btn-progress" class="sub-tab-btn <?= $initial_sub === 'progress' ? 'active' : '' ?>" onclick="switchSubTab('progress')">進捗の振り返り</button>
-                <button id="btn-personality" class="sub-tab-btn <?= $initial_sub === 'personality' ? 'active' : '' ?>" onclick="switchSubTab('personality')">人格の振り返り</button>
+                <button id="btn-progress" class="sub-tab-btn <?= $initial_sub === 'progress' ? 'active' : '' ?>" onclick="switchSubTab(this,'progress')">進捗の振り返り</button>
+                <button id="btn-personality" class="sub-tab-btn <?= $initial_sub === 'personality' ? 'active' : '' ?>" onclick="switchSubTab(this,'personality')">人格の振り返り</button>
             </div>
             <div id="daily-progress" class="h-100 <?= $initial_sub !== 'progress' ? 'd-none' : '' ?>">
                 <div class="row h-100">
@@ -613,6 +669,7 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
                             <h5 class="fw-bold mb-3">投稿フォーム</h5>
                             <form method="post" enctype="multipart/form-data">
                                 <input type="hidden" name="action" value="reflection">
+                                <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token']) ?>">
                                 <div class="mb-3 p-3 bg-white rounded">
                                     <label class="small fw-bold d-block mb-2">1. コードの写真 (Code)</label>
                                     <input type="file" name="code_file" class="form-control form-control-sm mb-3" accept="image/*">
@@ -648,6 +705,7 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
                             <h5 class="fw-bold mb-4">人格振り返りフォーム</h5>
                             <form method="post">
                                 <input type="hidden" name="action" value="note">
+                                <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token']) ?>">
                                 <div class="mb-3"><label class="small fw-bold d-block mb-1">対象者</label><select name="target_user_name" class="form-select bg-white"><option value="">プルダウン選択</option><option value="<?= h($current_user_name) ?>">自分 (Myself)</option><?php foreach ($team_members as $m): if($m['name'] !== $current_user_name): ?><option value="<?= h($m['name']) ?>"><?= h($m['name']) ?>さん</option><?php endif; endforeach; ?></select></div>
                                 <div class="mb-3"><label class="small fw-bold d-block mb-1">Good / More</label><select name="type" class="form-select bg-white"><option value="">プルダウン選択</option><option value="GOOD">Good (良い点)</option><option value="MORE">More (改善点)</option></select></div>
                                 <div class="mb-4"><label class="small fw-bold d-block mb-1">コメント</label><textarea name="content" class="form-control" rows="8" placeholder="具体的な行動や発言についてメモしておこう" required></textarea></div>
@@ -674,9 +732,9 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
         <div id="tab-weekly" class="content-section <?= $initial_tab !== 'weekly' ? 'd-none' : '' ?>">
             <div class="sub-tab-container justify-content-between">
                 <div class="d-flex gap-3 flex-grow-1 align-items-center">
-                    <button id="btn-weekly-input" class="sub-tab-btn active" onclick="switchWeeklySubTab('input')">進捗の入力</button>
+                    <button id="btn-weekly-input" class="sub-tab-btn active" onclick="switchWeeklySubTab(this,'input')">進捗の入力</button>
                     <div class="arrow-icon"><i class="bi bi-chevron-right"></i></div>
-                    <button id="btn-weekly-share" class="sub-tab-btn" onclick="switchWeeklySubTab('share')">進捗の共有</button>
+                    <button id="btn-weekly-share" class="sub-tab-btn" onclick="switchWeeklySubTab(this,'share')">進捗の共有</button>
                 </div>
                 <div class="d-flex gap-2 align-items-center">
                     <a href="index.php?tab=dashboard" class="next-plan-btn">次のPLAN設定</a>
@@ -687,6 +745,7 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
             <div id="weekly-input">
                 <form method="post">
                     <input type="hidden" name="action" value="weekly_reflection">
+                    <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token']) ?>">
                     <input type="hidden" name="goal_id" value="<?= $team_goal_data['id'] ?? '' ?>">
                     <?php if(!$team_goal_data): ?><div class="alert alert-warning">まずDASHBOARDで期間と目標を設定してください。</div><?php else: ?>
                         <div class="row">
@@ -747,7 +806,13 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
                 <div class="col-md-8">
                     <div class="gray-box text-start p-4 mb-4">
                         <h5 class="fw-bold mb-3"><i class="bi bi-link-45deg"></i> スプレッドシートのリンクを記録</h5>
-                        <form method="post" class="d-flex align-items-end gap-3"><input type="hidden" name="action" value="add_intermediate"><div class="flex-grow-1"><label class="small fw-bold mb-1">実施日</label><input type="date" name="review_date" class="form-control" required value="<?= date('Y-m-d') ?>"></div><div class="flex-grow-1" style="flex-basis: 50%;"><label class="small fw-bold mb-1">スプレッドシートのリンク (URL)</label><input type="url" name="sheet_url" class="form-control" placeholder="https://docs.google.com/..." required></div><button type="submit" class="btn btn-dark" style="min-width: 100px;">追加</button></form>
+                        <form method="post" class="d-flex align-items-end gap-3">
+                            <input type="hidden" name="action" value="add_intermediate">
+                            <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token']) ?>">
+                            <div class="flex-grow-1"><label class="small fw-bold mb-1">実施日</label><input type="date" name="review_date" class="form-control" required value="<?= date('Y-m-d') ?>"></div>
+                            <div class="flex-grow-1" style="flex-basis: 50%;"><label class="small fw-bold mb-1">スプレッドシートのリンク (URL)</label><input type="url" name="sheet_url" class="form-control" placeholder="https://docs.google.com/..." required></div>
+                            <button type="submit" class="btn btn-dark" style="min-width: 100px;">追加</button>
+                        </form>
                     </div>
                     <div class="timeline-area bg-white border" style="height: auto; min-height: 300px;">
                         <h5 class="fw-bold mb-3 text-secondary">過去の実施ログ</h5>
@@ -808,29 +873,34 @@ $initial_sub = isset($_GET['sub']) ? $_GET['sub'] : 'progress';
 <?php endif; ?>
 
 <script>
-function switchTab(tabName) {
-    document.querySelectorAll('.content-section').forEach(el => el.classList.add('d-none'));
-    document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
-    document.getElementById('tab-' + tabName).classList.remove('d-none');
-    event.currentTarget.classList.add('active');
+function switchTab(el, tabName) {
+    document.querySelectorAll('.content-section').forEach(section => section.classList.add('d-none'));
+    if (el) {
+        document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
+        el.classList.add('active');
+    }
+    const target = document.getElementById('tab-' + tabName);
+    if (target) target.classList.remove('d-none');
 }
-function switchSubTab(subName) {
+function switchSubTab(el, subName) {
     document.getElementById('daily-progress').classList.add('d-none');
     document.getElementById('daily-personality').classList.add('d-none');
-    document.getElementById('daily-' + subName).classList.remove('d-none');
+    const target = document.getElementById('daily-' + subName);
+    if (target) target.classList.remove('d-none');
     document.getElementById('btn-progress').classList.remove('active');
     document.getElementById('btn-personality').classList.remove('active');
-    document.getElementById('btn-' + subName).classList.add('active');
+    if (el) el.classList.add('active');
 }
-function switchWeeklySubTab(subName) {
+function switchWeeklySubTab(el, subName) {
     document.getElementById('weekly-input').classList.add('d-none');
     document.getElementById('weekly-share').classList.add('d-none');
     document.getElementById('btn-weekly-input').classList.remove('active');
     document.getElementById('btn-weekly-share').classList.remove('active');
-    document.getElementById('weekly-' + subName).classList.remove('d-none');
-    document.getElementById('btn-weekly-' + subName).classList.add('active');
+    const target = document.getElementById('weekly-' + subName);
+    if (target) target.classList.remove('d-none');
+    if (el) el.classList.add('active');
 }
-<?php if(isset($_GET['tab']) && $_GET['tab'] == 'weekly' && isset($_GET['sub']) && $_GET['sub'] == 'share'): ?>switchWeeklySubTab('share');<?php endif; ?>
+<?php if(isset($_GET['tab']) && $_GET['tab'] == 'weekly' && isset($_GET['sub']) && $_GET['sub'] == 'share'): ?>switchWeeklySubTab(null,'share');<?php endif; ?>
 </script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
